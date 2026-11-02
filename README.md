@@ -9,6 +9,12 @@ window usage and, for Claude Code, running subagents. Claude Code sessions
 use an animated Claude mascot instead of a logo; each Codex session shows a
 random pet from Codex's terminal UI.
 
+## Preview
+
+<p align="center">
+  <img src="docs/preview.jpg" alt="The deck on a desk, showing three Claude Code sessions and the summary tile" width="400">
+</p>
+
 ## How it works
 
 ```text
@@ -66,7 +72,7 @@ cargo run -p deck --features host --bin agent-deck [-- PORT]
 Install the ESP32 toolchain (`espup`, `espflash`) first; see the
 [esp32-libs setup chapter](https://github.com/ocdbytes/esp32-libs/tree/main/rust-esp32-book).
 
-## Preview
+## Desktop preview
 
 Preview sessions running on this Mac in a desktop window; use ← and → to
 change pages:

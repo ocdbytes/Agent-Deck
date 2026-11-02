@@ -7,6 +7,7 @@
 //! window.
 //!
 //! The panel is a 2×2 grid: three session tiles per page and a summary tile.
+//! Busy sessions come first, then idle ones, each oldest first.
 //! A session tile shows the agent's logo, its running subagents, its status,
 //! its name, how much of its context window it fills and how long it has run.
 //! In place of a logo, Claude Code shows its animated mascot and Codex one of
@@ -171,6 +172,16 @@ impl<R: FnMut() -> Option<u8>> Deck<R> {
                         })
                     })
                     .collect();
+                // Busy sessions first, each group in the Mac's order. This
+                // runs after hashing, so a session keeps its animation when
+                // its status changes.
+                let mut busy = 0;
+                for i in 0..self.rows.len() {
+                    if self.rows[i].status == Status::Busy {
+                        self.rows[busy..=i].rotate_right(1);
+                        busy += 1;
+                    }
+                }
                 // Stay on the last page if sessions ended.
                 self.page = self.page.min(self.pages() - 1);
             }
@@ -217,7 +228,7 @@ mod tests {
     use frames::Scene;
     use link_lib::{Agent, Context, Encoder, Entry, MAX_FRAME_LEN, Status};
 
-    use super::{Deck, FPS, SIZE};
+    use super::{Deck, FPS, SIZE, ui::session_hash};
 
     const WIDTH: usize = SIZE.width as usize;
     const HEIGHT: usize = SIZE.height as usize;
@@ -249,17 +260,11 @@ mod tests {
             context,
             subagents,
         };
-        let sent = [
+        let mut deck = received(&[
             entry(Agent::Claude, Status::Busy, 5),
             entry(Agent::Codex, Status::Busy, 0),
             entry(Agent::Codex, Status::Idle, 0),
-        ];
-        let mut buf = [0; MAX_FRAME_LEN];
-        let mut encoder = Encoder::new(&mut buf);
-        sent.iter().for_each(|entry| encoder.push(entry));
-        let mut bytes = encoder.finish().iter().copied();
-        let mut deck = Deck::new(move || bytes.next(), 7);
-        assert!(deck.receive());
+        ]);
 
         let (mut full, mut partial) = (Panel::new(), Panel::new());
         for tick in 0..3 * FPS {
@@ -271,5 +276,41 @@ mod tests {
             assert!(full.data() == partial.data(), "tick {tick}");
             deck.tick();
         }
+    }
+
+    /// Busy sessions must come first, in the order sent, and keep the
+    /// animation their place in that order picks.
+    #[test]
+    fn busy_sessions_come_first() {
+        let entry = |name, status| Entry {
+            agent: Agent::Claude,
+            status,
+            name,
+            uptime: 60,
+            context: None,
+            subagents: 0,
+        };
+        let deck = received(&[
+            entry("a", Status::Idle),
+            entry("deck", Status::Idle),
+            entry("b", Status::Busy),
+            entry("deck", Status::Busy),
+        ]);
+        let names = deck.rows.iter().map(|row| row.name.as_str());
+        assert!(names.eq(["b", "deck", "a", "deck"]));
+        assert_eq!(deck.rows[1].hash, session_hash("deck", 1, 7));
+    }
+
+    /// Returns a deck, seeded with 7, that has received `entries` in one
+    /// frame.
+    fn received(entries: &[Entry<'_>]) -> Deck<impl FnMut() -> Option<u8> + use<>> {
+        let mut buf = [0; MAX_FRAME_LEN];
+        let mut encoder = Encoder::new(&mut buf);
+        entries.iter().for_each(|entry| encoder.push(entry));
+        let len = encoder.finish().len();
+        let mut bytes = buf.into_iter().take(len);
+        let mut deck = Deck::new(move || bytes.next(), 7);
+        assert!(deck.receive());
+        deck
     }
 }

@@ -100,7 +100,7 @@ struct LogoSpec {
     /// SVG file, relative to `deck/assets/`.
     file: &'static str,
     /// `0xRRGGBB` color for a one-color logo, or `None` to keep the SVG's
-    /// colors.
+    /// colors, scaled up to full brightness.
     tint: Option<u32>,
     /// Whether the deck draws the logo at full size, not only at subagent
     /// size. Claude Code and Codex show animations there instead.
@@ -113,7 +113,9 @@ const LOGOS: &[LogoSpec] = &[
         name: "CLAUDE",
         doc: "Claude's logo, for Claude Code.",
         file: "logos/claude.svg",
-        tint: Some(0xD97757),
+        // Claude's orange `0xD97757` at full brightness, as the deck's
+        // mascot.
+        tint: Some(0xFF8C66),
         full_size: false,
     },
     LogoSpec {
@@ -186,6 +188,11 @@ const PET_FRAMES: usize = 6;
 /// Height of a pet on the deck, in pixels: the room between a tile's top
 /// padding and the top of its status line.
 const PET_HEIGHT: usize = 36;
+
+/// How much to brighten the pets, whose art is too dark on the LCD: each
+/// channel `c` becomes `255 * (c / 255)^(1 / PET_GAMMA)`, which lifts dark
+/// and mid tones and keeps black and white. 1 keeps the art's colors.
+const PET_GAMMA: f32 = 2.0;
 
 /// The README banner's text.
 const BANNER_TEXT: &str = "Agent Deck";
@@ -284,7 +291,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 ///
 /// Every frame is cut to the box that holds the pets in all the frames used,
 /// so they keep their sizes relative to each other, and scaled down to
-/// [`PET_HEIGHT`] by averaging the pixels each deck pixel covers.
+/// [`PET_HEIGHT`] by averaging the pixels each deck pixel covers, then
+/// brightened by [`PET_GAMMA`].
 fn render_pets() -> Result<(usize, Vec<u8>), Box<dyn Error>> {
     let (frame_w, frame_h) = PET_FRAME;
     let (columns, rows) = PET_GRID;
@@ -349,7 +357,10 @@ fn render_pets() -> Result<(usize, Vec<u8>), Box<dyn Error>> {
                         }
                     }
                     let count = ((sy1 - sy0) * (sx1 - sx0)).max(1) as u32;
-                    let [r, g, b] = sum.map(|total| (total / count) as u8);
+                    let [r, g, b] = sum.map(|total| {
+                        let channel = total as f32 / count as f32 / 255.0;
+                        (255.0 * channel.powf(PET_GAMMA.recip())).round() as u8
+                    });
                     out.extend(rgb565(r, g, b).to_be_bytes());
                 }
             }
@@ -568,7 +579,7 @@ fn pixel_glyph(font: &Font, c: char, px: f32) -> (Vec<(i32, i32)>, i32) {
 
 /// Renders an SVG logo into a `size` square of big-endian RGB565
 /// pixels, as pixel art: each pixel is either off (black) or fully on, in
-/// `tint` or in the SVG's own color there.
+/// `tint` or in the SVG's own color there at full brightness.
 ///
 /// Anti-aliased edges look soft at this size, so a pixel is on when at
 /// least [`LOGO_CUTOFF`] percent of it is covered. The logo's shapes, not its
@@ -609,8 +620,11 @@ fn render_logo(svg: &[u8], tint: Option<u32>, size: usize) -> Result<Vec<u8>, Bo
         } else if let Some(tint) = tint {
             [16, 8, 0].map(|shift| (tint >> shift & 0xFF) as u8)
         } else {
-            // Average color of the covered samples, with alpha taken out.
-            [red, green, blue].map(|channel| (channel * 255 / alpha) as u8)
+            // Average color of the covered samples, scaled up so its
+            // brightest channel is full, as the LCD shows darker colors
+            // dim. The ratios take alpha out.
+            let max = red.max(green).max(blue).max(1);
+            [red, green, blue].map(|channel| (channel * 255 / max) as u8)
         };
         out.extend(rgb565(r, g, b).to_be_bytes());
     }

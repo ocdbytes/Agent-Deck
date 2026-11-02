@@ -7,8 +7,9 @@ use link_lib::Status;
 use super::rgb;
 use crate::{FPS, assets::PETS, draw};
 
-/// Claude's orange, as in its logo.
-const CLAUDE_ORANGE: Rgb565 = rgb(0xD97757);
+/// Claude's orange: its logo's `0xD97757` scaled up to full brightness, as
+/// the LCD shows darker colors dim.
+const CLAUDE_ORANGE: Rgb565 = rgb(0xFF8C66);
 
 /// One pose of Claude Code's mascot: three rows of nine quadrant block
 /// characters, the way Claude Code draws it in the terminal.
