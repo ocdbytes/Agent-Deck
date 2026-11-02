@@ -8,9 +8,9 @@
 //!
 //! Subagents are saved next to the transcript as
 //! `<session id>/subagents/agent-<id>.jsonl`, each with an
-//! `agent-<id>.meta.json` holding its type and description. The transcript
-//! records when one finishes: a `<task-id>` notification for a background
-//! subagent, a tool result with its `agentId` for a foreground one.
+//! `agent-<id>.meta.json`. The transcript records when one finishes: a
+//! `<task-id>` notification for a background subagent, a tool result with
+//! its `agentId` for a foreground one.
 
 use std::{
     collections::HashSet,
@@ -22,10 +22,7 @@ use std::{
 
 use serde_json::Value;
 
-use crate::{
-    Agent, Context, Sealed, Session, SessionFetcher, Status, Subagent, dir_name, home_path,
-    processes,
-};
+use super::{Agent, Context, Session, Status, dir_name, home_path, processes};
 
 /// Context window of Claude models by model ID prefix, from Anthropic's model
 /// table of October 2026. Other models get no window.
@@ -57,38 +54,30 @@ const TAIL_LEN: u64 = 1 << 20;
 // finish was pushed out of the transcript tail shows as running until then.
 const RECENT: Duration = Duration::from_secs(15 * 60);
 
-/// Fetches the Claude Code sessions running on this machine.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct Claude;
-
-impl Sealed for Claude {}
-
-impl SessionFetcher for Claude {
-    /// Returns the Claude Code sessions running on this machine.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if `HOME` is not set, the session directory exists but
-    /// cannot be read, or `ps` cannot run.
-    fn sessions(&self) -> io::Result<Vec<Session>> {
-        let entries = match fs::read_dir(home_path(".claude/sessions")?) {
-            Ok(entries) => entries,
-            // No directory means Claude Code has not run on this machine.
-            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(err) => return Err(err),
-        };
-        let running: HashSet<u32> = processes()?
-            .into_iter()
-            .map(|process| process.pid)
-            .collect();
-        let projects = home_path(".claude/projects")?;
-        Ok(entries
-            .flatten()
-            .map(|entry| entry.path())
-            .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
-            .filter_map(|path| session(&fs::read_to_string(path).ok()?, &running, &projects))
-            .collect())
-    }
+/// Returns the Claude Code sessions running on this machine.
+///
+/// # Errors
+///
+/// Returns an error if `HOME` is not set, the session directory exists but
+/// cannot be read, or `ps` cannot run.
+pub(super) fn sessions() -> io::Result<Vec<Session>> {
+    let entries = match fs::read_dir(home_path(".claude/sessions")?) {
+        Ok(entries) => entries,
+        // No directory means Claude Code has not run on this machine.
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(err),
+    };
+    let running: HashSet<u32> = processes()?
+        .into_iter()
+        .map(|process| process.pid)
+        .collect();
+    let projects = home_path(".claude/projects")?;
+    Ok(entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
+        .filter_map(|path| session(&fs::read_to_string(path).ok()?, &running, &projects))
+        .collect())
 }
 
 /// Builds the session described by one session file.
@@ -127,8 +116,7 @@ fn session(json: &str, running: &HashSet<u32>, projects: &Path) -> Option<Sessio
         context: context(&tail),
         subagents: transcript
             .as_deref()
-            .map(|path| subagents(path, &tail))
-            .unwrap_or_default(),
+            .map_or(0, |path| subagents(path, &tail)),
     })
 }
 
@@ -167,45 +155,43 @@ fn context(tail: &str) -> Option<Context> {
             .iter()
             .filter_map(|field| usage[*field].as_u64())
             .sum::<u64>();
-            (used > 0).then(|| Context::new(used, message["model"].as_str().and_then(window)))
+            (used > 0).then(|| Context {
+                used,
+                window: message["model"].as_str().and_then(window),
+            })
         })
 }
 
-/// Returns the running subagents of the session whose transcript is at
-/// `path`, given `tail`, the end of that transcript.
+/// Returns how many subagents of the session whose transcript is at `path`
+/// are running, given `tail`, the end of that transcript.
 ///
 /// A subagent is running if it wrote its transcript within [`RECENT`] and
 /// `tail` does not record it finishing.
 // ponytail: only direct subagents are handled; a nested one (`spawnDepth`
 // above 1) finishes in its parent subagent's transcript, not this one.
-fn subagents(path: &Path, tail: &str) -> Vec<Subagent> {
+fn subagents(path: &Path, tail: &str) -> usize {
     let dir = path.with_extension("").join("subagents");
     let Ok(entries) = fs::read_dir(&dir) else {
-        return Vec::new();
+        return 0;
     };
     entries
         .flatten()
-        .filter_map(|entry| {
+        .filter(|entry| {
             let file = entry.file_name();
-            let id = file
-                .to_str()?
-                .strip_prefix("agent-")?
-                .strip_suffix(".meta.json")?;
-            let written = dir
-                .join(format!("agent-{id}.jsonl"))
+            let Some(id) = file
+                .to_str()
+                .and_then(|name| name.strip_prefix("agent-")?.strip_suffix(".meta.json"))
+            else {
+                return false;
+            };
+            dir.join(format!("agent-{id}.jsonl"))
                 .metadata()
                 .and_then(|meta| meta.modified())
-                .ok()?;
-            if written.elapsed().unwrap_or_default() > RECENT || finished(tail, id) {
-                return None;
-            }
-            let meta: Value = serde_json::from_str(&fs::read_to_string(entry.path()).ok()?).ok()?;
-            Some(Subagent {
-                agent_type: meta["agentType"].as_str().unwrap_or("?").to_owned(),
-                description: meta["description"].as_str().unwrap_or_default().to_owned(),
-            })
+                .is_ok_and(|written| {
+                    written.elapsed().unwrap_or_default() <= RECENT && !finished(tail, id)
+                })
         })
-        .collect()
+        .count()
 }
 
 /// Returns whether `tail` records subagent `id` finishing: a `<task-id>`

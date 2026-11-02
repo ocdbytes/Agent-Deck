@@ -116,21 +116,13 @@ dependencies = [
 name = "deck"
 version = "0.1.0"
 dependencies = [
- "deck-lib",
  "embedded-graphics",
  "embedded-graphics-simulator",
  "frames",
  "heapless",
  "link-lib",
- "serialport",
-]
-
-[[package]]
-name = "deck-lib"
-version = "0.1.0"
-dependencies = [
- "link-lib",
  "serde_json",
+ "serialport",
 ]
 
 [[package]]

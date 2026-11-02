@@ -15,41 +15,31 @@ use std::{
 
 use serde_json::Value;
 
-use crate::{
-    Agent, Context, Sealed, Session, SessionFetcher, Status, created, dir_name, home_path, lsof,
-};
+use super::{Agent, Context, Session, Status, created, dir_name, home_path, lsof};
 
-/// Fetches the Codex sessions running on this machine.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct Codex;
-
-impl Sealed for Codex {}
-
-impl SessionFetcher for Codex {
-    /// Returns the Codex sessions running on this machine.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if `HOME` is not set or `lsof` cannot run.
-    fn sessions(&self) -> io::Result<Vec<Session>> {
-        let locks = home_path(".codex/thread-writer-locks")?;
-        let mut threads: Vec<(u32, PathBuf)> = lsof(&["+d", &locks.to_string_lossy()])?
-            .into_iter()
-            .filter(|(_, path)| is_thread_lock(path))
-            .collect();
-        if threads.is_empty() {
-            return Ok(Vec::new());
-        }
-        // A process can hold one file open more than once.
-        threads.sort();
-        threads.dedup();
-        let rollouts = home_path(".codex/sessions")?;
-        let names = thread_names(&home_path(".codex/session_index.jsonl")?);
-        Ok(threads
-            .iter()
-            .map(|(pid, lock)| session(*pid, lock, &rollouts, &names))
-            .collect())
+/// Returns the Codex sessions running on this machine.
+///
+/// # Errors
+///
+/// Returns an error if `HOME` is not set or `lsof` cannot run.
+pub(super) fn sessions() -> io::Result<Vec<Session>> {
+    let locks = home_path(".codex/thread-writer-locks")?;
+    let mut threads: Vec<(u32, PathBuf)> = lsof(&["+d", &locks.to_string_lossy()])?
+        .into_iter()
+        .filter(|(_, path)| is_thread_lock(path))
+        .collect();
+    if threads.is_empty() {
+        return Ok(Vec::new());
     }
+    // A process can hold one file open more than once.
+    threads.sort();
+    threads.dedup();
+    let rollouts = home_path(".codex/sessions")?;
+    let names = thread_names(&home_path(".codex/session_index.jsonl")?);
+    Ok(threads
+        .iter()
+        .map(|(pid, lock)| session(*pid, lock, &rollouts, &names))
+        .collect())
 }
 
 /// Returns whether `path` is a thread's lock, not Codex's own
@@ -98,7 +88,7 @@ fn session(pid: u32, lock: &Path, rollouts: &Path, names: &HashMap<String, Strin
         status: rollout.status,
         started: created(lock),
         context: rollout.context,
-        subagents: Vec::new(),
+        subagents: 0,
     }
 }
 
@@ -161,8 +151,10 @@ fn read_rollout(text: &str) -> Rollout {
                 Some("token_count") => {
                     let info = &payload["info"];
                     if let Some(used) = info["last_token_usage"]["total_tokens"].as_u64() {
-                        rollout.context =
-                            Some(Context::new(used, info["model_context_window"].as_u64()));
+                        rollout.context = Some(Context {
+                            used,
+                            window: info["model_context_window"].as_u64(),
+                        });
                     }
                 }
                 _ => {}

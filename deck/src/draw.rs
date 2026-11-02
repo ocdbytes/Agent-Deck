@@ -6,15 +6,6 @@ use embedded_graphics::{
     prelude::*,
 };
 
-/// A bitmap of coverage values from 0 (background) to 15 (full color), two
-/// pixels per byte with the first in the high nibble, row by row.
-#[derive(Debug, Clone, Copy)]
-struct Bitmap {
-    width: u32,
-    height: u32,
-    data: &'static [u8],
-}
-
 /// A color image: big-endian RGB565 pixels, row by row, already blended over
 /// black. Black pixels are left undrawn.
 #[derive(Debug, Clone, Copy)]
@@ -24,8 +15,10 @@ pub(crate) struct Image {
     pub(crate) data: &'static [u8],
 }
 
-/// A monospaced font: one glyph [`Bitmap`] per character of `chars`, in
-/// order, each starting on a byte.
+/// A monospaced font: one glyph per character of `chars`, in order, each
+/// starting on a byte. A glyph is a bitmap of coverage values from 0
+/// (background) to 15 (full color), two pixels per byte with the first in the
+/// high nibble, row by row.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Font {
     pub(crate) chars: &'static str,
@@ -42,38 +35,40 @@ impl Font {
         text.chars().count() as i32 * self.width as i32
     }
 
-    /// Returns the glyph of `c`, or of `?` if the font has no `c`.
-    fn glyph(&self, c: char) -> Option<Bitmap> {
+    /// Returns the glyph bitmap of `c`, or of `?` if the font has no `c`.
+    fn glyph(&self, c: char) -> Option<&'static [u8]> {
         let index = self
             .chars
             .chars()
             .position(|glyph| glyph == c)
             .or_else(|| self.chars.chars().position(|glyph| glyph == '?'))?;
         let len = (self.width * self.height).div_ceil(2) as usize;
-        Some(Bitmap {
-            width: self.width,
-            height: self.height,
-            data: self.data.get(index * len..(index + 1) * len)?,
-        })
+        self.data.get(index * len..(index + 1) * len)
     }
-}
 
-/// Draws `bitmap` in `color` with its top-left corner at `top_left`.
-fn bitmap<D>(target: &mut D, bitmap: Bitmap, top_left: Point, color: Rgb565) -> Result<(), D::Error>
-where
-    D: DrawTarget<Color = Rgb565>,
-{
-    let pixels = bitmap
-        .data
-        .iter()
-        .flat_map(|byte| [byte >> 4, byte & 0xF])
-        .zip(0..bitmap.width * bitmap.height)
-        .filter(|&(coverage, _)| coverage > 0)
-        .map(|(coverage, i)| {
-            let offset = Point::new((i % bitmap.width) as i32, (i / bitmap.width) as i32);
-            Pixel(top_left + offset, fade(color, coverage))
-        });
-    target.draw_iter(pixels)
+    /// Draws `glyph`, one of this font's glyph bitmaps, in `color` with its
+    /// top-left corner at `top_left`.
+    fn draw_glyph<D>(
+        &self,
+        target: &mut D,
+        glyph: &[u8],
+        top_left: Point,
+        color: Rgb565,
+    ) -> Result<(), D::Error>
+    where
+        D: DrawTarget<Color = Rgb565>,
+    {
+        let pixels = glyph
+            .iter()
+            .flat_map(|byte| [byte >> 4, byte & 0xF])
+            .zip(0..self.width * self.height)
+            .filter(|&(coverage, _)| coverage > 0)
+            .map(|(coverage, i)| {
+                let offset = Point::new((i % self.width) as i32, (i / self.width) as i32);
+                Pixel(top_left + offset, fade(color, coverage))
+            });
+        target.draw_iter(pixels)
+    }
 }
 
 /// Draws `image` with its top-left corner at `top_left`.
@@ -110,7 +105,7 @@ where
     let mut x = origin.x;
     for c in text.chars() {
         if let Some(glyph) = font.glyph(c) {
-            bitmap(target, glyph, Point::new(x, top), color)?;
+            font.draw_glyph(target, glyph, Point::new(x, top), color)?;
         }
         x += font.width as i32;
     }

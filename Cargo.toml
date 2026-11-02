@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["deck", "deck-lib", "link-lib"]
+members = ["deck", "link-lib"]
 # The firmware builds for the ESP32 with its own toolchain, and the asset
 # generator has its own dependencies; each is built from its own directory.
 exclude = ["firmware", "tools"]

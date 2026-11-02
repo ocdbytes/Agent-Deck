@@ -8,7 +8,6 @@ version = "0.1.0"
 dependencies = [
  "deck",
  "embedded-graphics",
- "embedded-hal 1.0.0",
  "embedded-hal-bus",
  "esp-bootloader-esp-idf",
  "esp-hal",

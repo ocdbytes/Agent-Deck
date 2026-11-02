@@ -5,19 +5,19 @@ edition.workspace = true
 rust-version.workspace = true
 
 [features]
-# Mac side: fetch sessions with deck-lib and send them over the serial port.
-host = ["dep:deck-lib", "dep:serialport"]
+# Mac side: find this Mac's sessions and send them over the serial port.
+host = ["dep:serde_json", "dep:serialport"]
 # Desktop window that previews the deck with this Mac's sessions. `frames/sim`
 # builds SDL2 from source with cmake for the simulator.
 sim = ["host", "frames/sim", "dep:embedded-graphics-simulator"]
 
 [dependencies]
-deck-lib = { path = "../deck-lib", optional = true }
 embedded-graphics = "0.8"
 embedded-graphics-simulator = { version = "0.8", optional = true }
 frames = { git = "https://github.com/ocdbytes/esp32-libs.git" }
 heapless = "0.8"
 link-lib = { path = "../link-lib" }
+serde_json = { version = "1.0.154", optional = true }
 serialport = { version = "4.10.1", default-features = false, optional = true }
 
 # Sends this Mac's sessions to the deck over the USB cable.

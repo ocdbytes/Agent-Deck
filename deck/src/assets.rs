@@ -47,6 +47,13 @@ pub(crate) const CLAUDE: Image = Image {
     data: include_bytes!("../assets/gen/claude.bin"),
 };
 
+/// Claude's logo, for Claude Code. Quarter size, for subagents.
+pub(crate) const CLAUDE_SMALL: Image = Image {
+    width: 8,
+    height: 8,
+    data: include_bytes!("../assets/gen/claude_small.bin"),
+};
+
 /// pi's logo, from the press kit at <https://pi.dev/press-kit>.
 pub(crate) const PI: Image = Image {
     width: 32,
@@ -54,9 +61,23 @@ pub(crate) const PI: Image = Image {
     data: include_bytes!("../assets/gen/pi.bin"),
 };
 
+/// pi's logo, from the press kit at <https://pi.dev/press-kit>. Quarter size, for subagents.
+pub(crate) const PI_SMALL: Image = Image {
+    width: 8,
+    height: 8,
+    data: include_bytes!("../assets/gen/pi_small.bin"),
+};
+
 /// OpenAI's logo, for Codex.
 pub(crate) const OPENAI: Image = Image {
     width: 32,
     height: 32,
     data: include_bytes!("../assets/gen/openai.bin"),
+};
+
+/// OpenAI's logo, for Codex. Quarter size, for subagents.
+pub(crate) const OPENAI_SMALL: Image = Image {
+    width: 8,
+    height: 8,
+    data: include_bytes!("../assets/gen/openai_small.bin"),
 };

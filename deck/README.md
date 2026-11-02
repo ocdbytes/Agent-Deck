@@ -5,13 +5,13 @@ The agent deck itself: the display that draws the session list on a 2.8"
 
 ## Features
 
-`deck-lib` needs `std` and can't build for the ESP32, so the Mac side is
-behind features:
+The Mac side needs `std` and can't build for the ESP32, so it is behind
+features:
 
 | Build | Contains | Builds for |
 | ----- | -------- | ---------- |
 | default | `Deck`, `SIZE` (`no_std`) | ESP32 and desktop |
-| `--features host` | Adds `host::frame`, `host::run` and the `agent-deck` binary (uses `deck-lib` and `serialport`) | Mac |
+| `--features host` | Adds `host::frame`, `host::run` and the `agent-deck` binary (uses `serde_json` and `serialport`) | Mac |
 | `--features sim` | Adds the desktop preview example (builds SDL2 with CMake) | Mac |
 
 ## The display
@@ -35,16 +35,19 @@ loop {
 The panel is a 2×2 grid of 120x160 tiles. Three tiles per page show
 sessions, and the fourth is the summary.
 
-- **Session tile:** the agent's logo, `● 稼働 busy` in green or `○ 待機 idle`
+- **Session tile:** the agent's logo, its running subagents at the top
+  right, `● 稼働 busy` in green or `○ 待機 idle`
   in grey, the name in `「」` (cut with `…` if long), the percentage of the
   context window in big pixel numerals with a bar under it, and `ctx` (tokens
   used / window) and `up` (uptime) rows. From 80 % context
-  (`WARN_PERCENT`) the percentage and bar turn vermilion.
+  (`WARN_PERCENT`) the percentage and bar turn vermilion. Subagents show
+  as one small logo each, up to 3 (`MAX_SUBAGENT_LOGOS`); more show as one
+  small logo and a count, such as `x5`.
 - **Summary tile:** `今 now` with the page (`1/3`), the number of busy and
   idle sessions, and `tok`, the context tokens of all sessions together.
 
 `next_page()` and `prev_page()` turn the pages; on the panel, wire them to
-buttons. Subagents are received but not drawn yet.
+buttons.
 
 ### Fonts and logos
 
@@ -60,7 +63,8 @@ The fonts and SVGs live in `assets/`. `tools/assets` renders them into
 
 - **Glyphs:** 4-bit coverage bitmaps that the deck blends over the black
   background, so text is anti-aliased.
-- **Logos:** 32x32 pixel art in RGB565: each pixel is off or fully on, so
+- **Logos:** 32x32 pixel art in RGB565, and 8x8 copies for subagents
+  (`SMALL_LOGO_SIZE` in `tools/assets`): each pixel is off or fully on, so
   edges stay sharp on the panel. A pixel is on when at least 35% of it is
   covered, measured at 8× resolution, which keeps thin strokes unbroken.
   Each logo's shapes are scaled to fill the square, whatever margin its SVG
@@ -92,7 +96,7 @@ next to them in `assets/fonts/`. The logos are trademarks of their owners.
 ## The Mac side
 
 - **`host::frame(&mut buf)`:** fetches every agent's sessions (oldest first)
-  and encodes them, with their running subagents, into one frame.
+  and encodes them, with their running subagent counts, into one frame.
 - **`host::run(port, interval)`:** the main loop. It writes a fresh frame to
   `port` every `interval`, forever. `port` is the deck's serial port,
   already open at the firmware's baud rate.
@@ -106,6 +110,38 @@ next to them in `assets/fonts/`. The logos are trademarks of their owners.
   Without `PORT` it uses the only USB serial port in `/dev` (CP210x, CH340
   or native USB). It releases DTR and RTS after opening the port, so the
   board's auto-reset circuit lets the ESP32 run.
+
+### Where the data comes from
+
+`host` has one module per agent. All of these files are internal to the
+agents and can change between versions.
+
+| | Claude Code | pi | Codex |
+| - | ----------- | -- | ----- |
+| Running sessions | `~/.claude/sessions/<pid>.json` whose process is running | `pi` processes, their working directory (`lsof`), and the newest transcript in `~/.pi/agent/sessions/--<cwd>--/` written since the process started | Lock files held open in `~/.codex/thread-writer-locks/<thread id>.lock` |
+| Name | `name` in the session file | Last `session_info` entry, else the directory name | `~/.codex/session_index.jsonl`, else the working directory's name |
+| Status | `status` in the session file | Last message: idle after an assistant reply that did not call a tool | Rollout events: busy from `task_started` to `task_complete` or `turn_aborted` |
+| Start time | `startedAt` in the session file | Process start time (`ps`) | Lock file creation time |
+| Context used | Last main-thread reply in the last 1 MiB of `~/.claude/projects/*/<session id>.jsonl` | Last reply, counted the way pi does | Last `token_count` event in the rollout |
+| Context window | Table of model ID prefixes in `host/claude.rs` | `~/.pi/agent/models-store.json` | `model_context_window` in the rollout |
+| Subagents | `<session id>/subagents/`, see below | pi has none | Not read yet |
+
+A Claude Code subagent counts as running if it wrote its transcript in the
+last 15 minutes and the session transcript's last 1 MiB has no finish record
+for it (a `<task-id>` notification, or a tool result with its `agentId`).
+
+### Known limits
+
+These are marked with `ponytail:` comments in the code.
+
+- **Claude Code:** context windows are a hardcoded table; a new model shows
+  its token count with an unknown window until it is added.
+- **Claude Code subagents:** one silent for over 15 minutes counts as
+  finished, and nested subagents are not handled.
+- **pi:** two pi processes in the same directory show the same transcript.
+- **Codex:** a thread's rollout is found by walking `~/.codex/sessions`,
+  newest dates first. Codex subagents are not read yet.
+- **pi and Codex:** each poll parses the whole transcript.
 
 ## Preview
 

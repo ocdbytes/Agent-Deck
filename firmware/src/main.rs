@@ -22,9 +22,9 @@ use embedded_graphics::{
     },
     prelude::*,
 };
-use embedded_hal::delay::DelayNs;
 use embedded_hal_bus::spi::ExclusiveDevice;
 use esp_hal::clock::CpuClock;
+use esp_hal::delay::Delay;
 use esp_hal::gpio::{Input, InputConfig, Level, Output, OutputConfig, Pull};
 use esp_hal::main;
 use esp_hal::spi::master::{Config as SpiConfig, Spi};
@@ -72,17 +72,6 @@ type Frame =
 
 /// The frame is 150 KB, far too big for the stack, so it lives in static RAM.
 static FRAME: ConstStaticCell<Frame> = ConstStaticCell::new(Frame::new());
-
-/// Busy-wait delay for the display's reset sequence.
-struct BusyDelay;
-
-impl DelayNs for BusyDelay {
-    fn delay_ns(&mut self, ns: u32) {
-        let wait = Duration::from_micros(u64::from(ns.div_ceil(1_000)));
-        let start = Instant::now();
-        while start.elapsed() < wait {}
-    }
-}
 
 /// A push button from a GPIO to GND, read with the internal pull-up.
 struct Button<'d> {
@@ -144,7 +133,7 @@ fn main() -> ! {
         .orientation(ORIENTATION)
         .color_order(COLOR_ORDER)
         .invert_colors(COLOR_INVERSION)
-        .init(&mut BusyDelay)
+        .init(&mut Delay::new())
         .unwrap();
 
     // The USB cable's serial chip is wired to UART0, RX on GPIO3.

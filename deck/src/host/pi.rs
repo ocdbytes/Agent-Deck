@@ -13,43 +13,33 @@ use std::{
 
 use serde_json::Value;
 
-use crate::{
-    Agent, Context, Sealed, Session, SessionFetcher, Status, dir_name, home_path, lsof, processes,
-};
+use super::{Agent, Context, Session, Status, dir_name, home_path, lsof, processes};
 
-/// Fetches the pi sessions running on this machine.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct Pi;
-
-impl Sealed for Pi {}
-
-impl SessionFetcher for Pi {
-    /// Returns the pi sessions running on this machine.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if `HOME` is not set or `ps` or `lsof` cannot run.
-    fn sessions(&self) -> io::Result<Vec<Session>> {
-        let started: HashMap<u32, SystemTime> = processes()?
-            .into_iter()
-            .filter(|process| is_pi(&process.args))
-            .map(|process| (process.pid, process.started))
-            .collect();
-        if started.is_empty() {
-            return Ok(Vec::new());
-        }
-        let pids: Vec<String> = started.keys().map(u32::to_string).collect();
-        let root = home_path(".pi/agent/sessions")?;
-        // The model list only adds context windows, so a missing one is fine.
-        let models: Value = fs::read_to_string(home_path(".pi/agent/models-store.json")?)
-            .ok()
-            .and_then(|text| serde_json::from_str(&text).ok())
-            .unwrap_or_default();
-        Ok(lsof(&["-a", "-d", "cwd", "-p", &pids.join(",")])?
-            .into_iter()
-            .filter_map(|(pid, cwd)| Some(session(&root, &cwd, *started.get(&pid)?, &models)))
-            .collect())
+/// Returns the pi sessions running on this machine.
+///
+/// # Errors
+///
+/// Returns an error if `HOME` is not set or `ps` or `lsof` cannot run.
+pub(super) fn sessions() -> io::Result<Vec<Session>> {
+    let started: HashMap<u32, SystemTime> = processes()?
+        .into_iter()
+        .filter(|process| is_pi(&process.args))
+        .map(|process| (process.pid, process.started))
+        .collect();
+    if started.is_empty() {
+        return Ok(Vec::new());
     }
+    let pids: Vec<String> = started.keys().map(u32::to_string).collect();
+    let root = home_path(".pi/agent/sessions")?;
+    // The model list only adds context windows, so a missing one is fine.
+    let models: Value = fs::read_to_string(home_path(".pi/agent/models-store.json")?)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default();
+    Ok(lsof(&["-a", "-d", "cwd", "-p", &pids.join(",")])?
+        .into_iter()
+        .filter_map(|(pid, cwd)| Some(session(&root, &cwd, *started.get(&pid)?, &models)))
+        .collect())
 }
 
 /// Returns whether `args` is a pi command line.
@@ -73,18 +63,15 @@ fn session(root: &Path, cwd: &Path, started: SystemTime, models: &Value) -> Sess
     let transcript = latest_transcript(&root.join(session_dir(cwd)))
         .filter(|(_, modified)| *modified >= started)
         .and_then(|(path, _)| fs::read_to_string(path).ok())
-        .map(|text| read_transcript(&text))
+        .map(|text| read_transcript(&text, models))
         .unwrap_or_default();
-    let context = transcript
-        .reply
-        .map(|reply| Context::new(reply.tokens, window(models, &reply.provider, &reply.model)));
     Session {
         agent: Agent::Pi,
         name: transcript.name.unwrap_or_else(|| dir_name(cwd)),
         status: transcript.status,
         started,
-        context,
-        subagents: Vec::new(),
+        context: transcript.context,
+        subagents: 0,
     }
 }
 
@@ -129,22 +116,15 @@ struct Transcript {
     /// Idle when the last message is from the assistant and did not stop to
     /// call a tool.
     status: Status,
-    /// The last reply that counts towards the context.
-    reply: Option<Reply>,
+    /// The context after the last reply that counts towards it.
+    context: Option<Context>,
 }
 
-/// The tokens of one pi reply and the model that wrote it.
-#[derive(Debug)]
-struct Reply {
-    tokens: u64,
-    provider: String,
-    model: String,
-}
-
-/// Reads a pi transcript (JSON lines).
+/// Reads a pi transcript (JSON lines), looking up context windows in pi's
+/// model list `models`.
 // ponytail: parses the whole transcript on every call; read from the end if
 // large transcripts make polling slow.
-fn read_transcript(text: &str) -> Transcript {
+fn read_transcript(text: &str, models: &Value) -> Transcript {
     let mut transcript = Transcript::default();
     for entry in text
         .lines()
@@ -166,8 +146,8 @@ fn read_transcript(text: &str) -> Transcript {
                     // System prompt entries say nothing about the run.
                     _ => transcript.status,
                 };
-                if let Some(reply) = reply(message) {
-                    transcript.reply = Some(reply);
+                if let Some(context) = context(message, models) {
+                    transcript.context = Some(context);
                 }
             }
             _ => {}
@@ -176,13 +156,13 @@ fn read_transcript(text: &str) -> Transcript {
     transcript
 }
 
-/// Returns the tokens and model of an assistant message, counted the way pi
-/// counts context: the reported total, or else the sum of input, output and
-/// cache tokens.
+/// Returns the context after an assistant message: its tokens, counted the
+/// way pi counts context (the reported total, or else the sum of input,
+/// output and cache tokens), in the window `models` lists for its model.
 ///
 /// Returns `None` for other messages, and for aborted, failed or empty
 /// replies, which pi skips too.
-fn reply(message: &Value) -> Option<Reply> {
+fn context(message: &Value, models: &Value) -> Option<Context> {
     if message["role"] != "assistant"
         || message["stopReason"] == "aborted"
         || message["stopReason"] == "error"
@@ -197,9 +177,12 @@ fn reply(message: &Value) -> Option<Reply> {
             .filter_map(|field| usage[*field].as_u64())
             .sum(),
     };
-    (tokens > 0).then(|| Reply {
-        tokens,
-        provider: message["provider"].as_str().unwrap_or_default().to_owned(),
-        model: message["model"].as_str().unwrap_or_default().to_owned(),
+    (tokens > 0).then(|| Context {
+        used: tokens,
+        window: window(
+            models,
+            message["provider"].as_str().unwrap_or_default(),
+            message["model"].as_str().unwrap_or_default(),
+        ),
     })
 }

@@ -7,12 +7,13 @@
 //! window.
 //!
 //! The panel is a 2×2 grid: three session tiles per page and a summary tile.
-//! A session tile shows the agent's logo, its status, its name, how much of
-//! its context window it fills and how long it has run. The summary shows the
-//! page, how many sessions are busy and idle, and their total context tokens.
+//! A session tile shows the agent's logo, its running subagents, its status,
+//! its name, how much of its context window it fills and how long it has run.
+//! The summary shows the page, how many sessions are busy and idle, and their
+//! total context tokens.
 //!
-//! With the `host` feature, [`host`] is the Mac side: its main loop fetches
-//! the sessions with `deck_lib` and sends them to the deck.
+//! With the `host` feature, [`host`] is the Mac side: its main loop finds the
+//! sessions running on the Mac and sends them to the deck.
 
 #![cfg_attr(not(feature = "host"), no_std)]
 #![warn(
@@ -38,7 +39,12 @@ use frames::Scene;
 use heapless::{String, Vec};
 use link_lib::{Agent, Context, Decoder, MAX_SESSIONS, MAX_TEXT_LEN, Status};
 
-use crate::assets::{BODY, CLAUDE, KANJI, NUMERAL, OPENAI, PERCENT, PI};
+use crate::{
+    assets::{
+        BODY, CLAUDE, CLAUDE_SMALL, KANJI, NUMERAL, OPENAI, OPENAI_SMALL, PERCENT, PI, PI_SMALL,
+    },
+    draw::Image,
+};
 
 /// Panel size in pixels, in portrait orientation.
 pub const SIZE: Size = Size::new(240, 320);
@@ -57,6 +63,13 @@ const PER_PAGE: usize = 3;
 
 /// Context use, in percent, from which a session shows in vermilion.
 const WARN_PERCENT: u64 = 80;
+
+/// Most subagents drawn as one small logo each; more show as one logo and a
+/// count, such as `x5`.
+const MAX_SUBAGENT_LOGOS: usize = 3;
+
+/// Space between small subagent logos, and before the count, in pixels.
+const SUBAGENT_GAP: i32 = 2;
 
 /// Values and names.
 const TEXT: Rgb565 = rgb(0xE8E4DC);
@@ -88,6 +101,7 @@ struct Row {
     name: String<MAX_TEXT_LEN>,
     uptime: u64,
     context: Option<Context>,
+    subagents: usize,
 }
 
 /// The deck display: keeps the latest session list and draws it, a page at
@@ -139,18 +153,19 @@ impl<R: FnMut() -> Option<u8>> Deck<R> {
     pub fn receive(&mut self) -> bool {
         let mut received = false;
         while let Some(byte) = (self.read)() {
-            if let Some(Ok(frame)) = self.decoder.push(byte) {
+            if let Some(frame) = self.decoder.push(byte) {
                 received = true;
                 self.rows = frame
                     .entries()
                     .take(MAX_SESSIONS)
                     .filter_map(|entry| {
                         Some(Row {
-                            agent: entry.agent(),
-                            status: entry.status(),
-                            name: entry.name().try_into().ok()?,
-                            uptime: entry.uptime(),
-                            context: entry.context(),
+                            agent: entry.agent,
+                            status: entry.status,
+                            name: entry.name.try_into().ok()?,
+                            uptime: entry.uptime,
+                            context: entry.context,
+                            subagents: entry.subagents,
                         })
                     })
                     .collect();
@@ -211,14 +226,15 @@ where
 {
     let (left, right) = (at.x + PAD, at.x + TILE_W - PAD);
 
-    let logo = match row.agent {
-        Agent::Claude => Some(CLAUDE),
-        Agent::Pi => Some(PI),
-        Agent::Codex => Some(OPENAI),
+    let logos = match row.agent {
+        Agent::Claude => Some((CLAUDE, CLAUDE_SMALL)),
+        Agent::Pi => Some((PI, PI_SMALL)),
+        Agent::Codex => Some((OPENAI, OPENAI_SMALL)),
         _ => None,
     };
-    if let Some(logo) = logo {
+    if let Some((logo, small)) = logos {
         draw::image(target, logo, Point::new(left, at.y + PAD))?;
+        draw_subagents(target, small, row.subagents, right, at.y + PAD)?;
     }
 
     // ● 稼働 busy, or ○ 待機 idle.
@@ -250,8 +266,8 @@ where
 
     // Big percentage of the context window, rounded, and a bar of it.
     let percent = row.context.and_then(|context| {
-        let window = context.window().filter(|&window| window > 0)?;
-        Some((context.used().saturating_mul(100) + window / 2) / window)
+        let window = context.window.filter(|&window| window > 0)?;
+        Some((context.used.saturating_mul(100) + window / 2) / window)
     });
     let color = if percent.is_some_and(|percent| percent >= WARN_PERCENT) {
         VERMILION
@@ -292,6 +308,46 @@ where
         left,
         right,
     )
+}
+
+/// Draws a session's `count` running subagents as small `logo`s in a row
+/// ending at `right`, with their tops at `top`: one logo per subagent up to
+/// [`MAX_SUBAGENT_LOGOS`], or one logo and `x<count>` for more.
+fn draw_subagents<D>(
+    target: &mut D,
+    logo: Image,
+    count: usize,
+    right: i32,
+    top: i32,
+) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = Rgb565>,
+{
+    let mut x = right;
+    let logos = if count > MAX_SUBAGENT_LOGOS {
+        let mut text = Label::new();
+        // invariant: `x` and a usize of at most 20 digits fit a Label.
+        let _ = write!(text, "x{count}");
+        x -= BODY.text_width(&text);
+        // The count sits on the logos' bottom edge.
+        draw::text(
+            target,
+            &BODY,
+            &text,
+            Point::new(x, top + logo.height as i32),
+            TEXT,
+        )?;
+        x -= SUBAGENT_GAP;
+        1
+    } else {
+        count
+    };
+    for _ in 0..logos {
+        x -= logo.width as i32;
+        draw::image(target, logo, Point::new(x, top))?;
+        x -= SUBAGENT_GAP;
+    }
+    Ok(())
 }
 
 /// Draws the summary tile with its top-left corner at `at`: 今 now and the
@@ -336,7 +392,7 @@ where
     let total = rows
         .iter()
         .filter_map(|row| row.context)
-        .map(|context| context.used())
+        .map(|context| context.used)
         .sum();
     draw_row(target, "tok", &tokens_text(total), at.y + 152, left, right)
 }
@@ -427,8 +483,8 @@ fn context_text(context: Option<Context>) -> Label {
     let Some(context) = context else {
         return "-".try_into().unwrap_or_default();
     };
-    let mut text = tokens_text(context.used());
-    if let Some(window) = context.window() {
+    let mut text = tokens_text(context.used);
+    if let Some(window) = context.window {
         // invariant: two token counts of at most 17 bytes and a slash fit a
         // Label.
         let _ = write!(text, "/{}", tokens_text(window));

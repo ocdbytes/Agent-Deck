@@ -118,6 +118,10 @@ const LOGOS: &[LogoSpec] = &[
 /// four-block grid lands on whole 8 px blocks.
 const LOGO_SIZE: usize = 32;
 
+/// Width and height of the small logos drawn for subagents, in pixels: a
+/// quarter of [`LOGO_SIZE`].
+const SMALL_LOGO_SIZE: usize = LOGO_SIZE / 4;
+
 /// Logos are rendered this many times larger, so each pixel's coverage is
 /// measured over `SUPERSAMPLE`² samples.
 const SUPERSAMPLE: usize = 8;
@@ -158,16 +162,25 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     for spec in LOGOS {
-        let file = format!("{}.bin", spec.name.to_lowercase());
-        let pixels = render_logo(&fs::read(assets.join(spec.file))?, spec.tint)?;
-        fs::write(generated.join(&file), pixels)?;
-        writeln!(
-            rust,
-            "\n/// {}\npub(crate) const {}: Image = Image {{\n    \
-             width: {LOGO_SIZE},\n    height: {LOGO_SIZE},\n    \
-             data: include_bytes!(\"../assets/gen/{file}\"),\n}};",
-            spec.doc, spec.name,
-        )?;
+        let svg = fs::read(assets.join(spec.file))?;
+        let sizes = [
+            (spec.name.to_owned(), spec.doc.to_owned(), LOGO_SIZE),
+            (
+                format!("{}_SMALL", spec.name),
+                format!("{} Quarter size, for subagents.", spec.doc),
+                SMALL_LOGO_SIZE,
+            ),
+        ];
+        for (name, doc, size) in sizes {
+            let file = format!("{}.bin", name.to_lowercase());
+            fs::write(generated.join(&file), render_logo(&svg, spec.tint, size)?)?;
+            writeln!(
+                rust,
+                "\n/// {doc}\npub(crate) const {name}: Image = Image {{\n    \
+                 width: {size},\n    height: {size},\n    \
+                 data: include_bytes!(\"../assets/gen/{file}\"),\n}};",
+            )?;
+        }
     }
 
     fs::write(deck.join("src/assets.rs"), rust)?;
@@ -228,7 +241,7 @@ fn render_font(font: &Font, spec: &FontSpec) -> Glyphs {
     }
 }
 
-/// Renders an SVG logo into a `LOGO_SIZE` square of big-endian RGB565
+/// Renders an SVG logo into a `size` square of big-endian RGB565
 /// pixels, as pixel art: each pixel is either off (black) or fully on, in
 /// `tint` or in the SVG's own color there.
 ///
@@ -236,10 +249,10 @@ fn render_font(font: &Font, spec: &FontSpec) -> Glyphs {
 /// least [`LOGO_CUTOFF`] percent of it is covered. The logo's shapes, not its
 /// SVG canvas, are scaled to fill the square, so logos with different
 /// margins come out the same size.
-fn render_logo(svg: &[u8], tint: Option<u32>) -> Result<Vec<u8>, Box<dyn Error>> {
+fn render_logo(svg: &[u8], tint: Option<u32>, size: usize) -> Result<Vec<u8>, Box<dyn Error>> {
     let tree = usvg::Tree::from_data(svg, &usvg::Options::default())?;
     let bounds = tree.root().abs_bounding_box();
-    let big = LOGO_SIZE * SUPERSAMPLE;
+    let big = size * SUPERSAMPLE;
     let scale = big as f32 / bounds.width().max(bounds.height());
     let x = (big as f32 - bounds.width() * scale) / 2.0 - bounds.x() * scale;
     let y = (big as f32 - bounds.height() * scale) / 2.0 - bounds.y() * scale;
@@ -251,9 +264,9 @@ fn render_logo(svg: &[u8], tint: Option<u32>) -> Result<Vec<u8>, Box<dyn Error>>
     );
 
     let samples = pixmap.pixels();
-    let mut out = Vec::with_capacity(LOGO_SIZE * LOGO_SIZE * 2);
-    for i in 0..LOGO_SIZE * LOGO_SIZE {
-        let (left, top) = (i % LOGO_SIZE * SUPERSAMPLE, i / LOGO_SIZE * SUPERSAMPLE);
+    let mut out = Vec::with_capacity(size * size * 2);
+    for i in 0..size * size {
+        let (left, top) = (i % size * SUPERSAMPLE, i / size * SUPERSAMPLE);
         // Sum of alpha and of premultiplied red, green and blue under the pixel.
         let mut sum = [0u32; 4];
         for row in top..top + SUPERSAMPLE {

@@ -11,14 +11,14 @@ For each session the deck gets:
 - whether it is busy or idle
 - how long it has been running
 - how much of the model's context window it fills
-- its running subagents (Claude Code only)
+- how many subagents it is running (Claude Code only)
 
 ## How it works
 
 ```text
 Mac                                                  ESP32
 ───                                                  ─────
-deck-lib  ── finds sessions ──┐
+deck host ── finds sessions ─┐
                               ▼
 link-lib  Encoder ── frame ── USB serial ──▶ link-lib Decoder
                                                      │
@@ -34,9 +34,8 @@ the next update.
 
 | Crate | Runs on | What it does |
 | ----- | ------- | ------------ |
-| [`deck-lib`](deck-lib/) | Mac | Finds running sessions, their uptime, context and subagents. |
 | [`link-lib`](link-lib/) | Mac and ESP32 (`no_std`) | The wire protocol: frame format, `Encoder` and `Decoder`. |
-| [`deck`](deck/) | ESP32 and Mac | The display (`Deck`, a `frames::Scene`), the Mac sender (`agent-deck`), and a desktop preview. |
+| [`deck`](deck/) | ESP32 and Mac | The display (`Deck`, a `frames::Scene`); with the `host` feature, the Mac side that finds running sessions and sends them (`agent-deck`), and a desktop preview. |
 | [`firmware`](firmware/) | ESP32 | Reads frames from the USB cable and draws them with `Deck`. Built on its own, outside the workspace. |
 
 `tools/assets` is a separate tool, outside the workspace, that renders the
@@ -96,14 +95,14 @@ The ESP32 check needs the `esp` toolchain; see the setup chapter of
 ## Requirements
 
 - Rust 1.85 or newer.
-- macOS or Linux on the host: `deck-lib` runs `ps` and `lsof`.
+- macOS or Linux on the host: `deck`'s `host` feature runs `ps` and `lsof`.
 - An ESP32 board, a 2.8" 240x320 ILI9341 SPI TFT and two 4-pin push buttons
   for the deck.
 
 ## Status
 
 - The display follows the "sumi" dark design: a 2×2 grid of session tiles
-  and a summary tile, a page at a time. Subagents are sent but not drawn.
+  and a summary tile, a page at a time.
 - The firmware and `agent-deck` build and run up to the hardware, but have
   not yet been tested on a board.
 - Two buttons turn the pages: left (GPIO32) back, right (GPIO33) forward.

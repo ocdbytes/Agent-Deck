@@ -20,7 +20,6 @@ log = "0.4.27"
 
 deck = { path = "../deck" }
 embedded-graphics = "0.8"
-embedded-hal = "1.0"
 embedded-hal-bus = "0.3"
 frames = { git = "https://github.com/ocdbytes/esp32-libs.git" }
 mipidsi = "0.10"

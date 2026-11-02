@@ -9,14 +9,18 @@ code the Mac encodes with.
 On the Mac, build a frame with `Encoder`:
 
 ```rust
-use link_lib::{Agent, Context, Encoder, Entry, MAX_FRAME_LEN, Status, SubagentEntry};
+use link_lib::{Agent, Context, Encoder, Entry, MAX_FRAME_LEN, Status};
 
 let mut buf = [0; MAX_FRAME_LEN];
 let mut encoder = Encoder::new(&mut buf);
-let entry = Entry::new(Agent::Claude, Status::Busy, "agent-deck")
-    .with_uptime(3600)
-    .with_context(Some(Context::new(250_000, Some(1_000_000))));
-encoder.push(&entry, [SubagentEntry::new("Explore", "Read the docs")]);
+encoder.push(&Entry {
+    agent: Agent::Claude,
+    status: Status::Busy,
+    name: "agent-deck",
+    uptime: 3600,
+    context: Some(Context { used: 250_000, window: Some(1_000_000) }),
+    subagents: 2,
+});
 port.write_all(encoder.finish())?;
 ```
 
@@ -26,41 +30,39 @@ On the ESP32, feed each received byte to a `Decoder`:
 use link_lib::Decoder;
 
 let mut decoder = Decoder::new();
-if let Some(Ok(frame)) = decoder.push(byte) {
+if let Some(frame) = decoder.push(byte) {
     for entry in frame.entries() {
-        // entry.agent(), .status(), .name(), .uptime(), .context()
-        for subagent in entry.subagents() { /* .agent_type(), .description() */ }
+        // entry.agent, .status, .name, .uptime, .context, .subagents
     }
 }
 ```
 
-`push` returns an `Error` for a frame that is too long (`TooLong`), damaged
-(`Checksum`) or malformed (`Malformed`), then carries on with the next frame.
+`push` drops a frame that is too long, damaged or malformed, then carries on
+with the next frame.
 
 ## Frame format
 
 A frame is one line of text:
 
 ```text
-frame    = crc " " body "\n"
-crc      = 4 lowercase hex digits: CRC-16/IBM-3740 of body
-body     = *(entry RS)
-entry    = agent status US uptime US used US window US name *(US subagent)
-subagent = text GS text            ; the subagent's type, then its description
-agent    = "c" (Claude Code) / "p" (pi) / "x" (Codex)
-status   = "b" (busy) / "i" (idle)
-uptime   = decimal seconds the session has run
-used     = decimal context tokens in use; empty when unknown
-window   = decimal context window in tokens; empty when unknown
-name     = text
-text     = up to MAX_TEXT_LEN bytes of UTF-8 without control characters
+frame     = crc " " body "\n"
+crc       = 4 lowercase hex digits: CRC-16/IBM-3740 of body
+body      = *(entry RS)
+entry     = agent status US uptime US used US window US subagents US name
+agent     = "c" (Claude Code) / "p" (pi) / "x" (Codex)
+status    = "b" (busy) / "i" (idle)
+uptime    = decimal seconds the session has run
+used      = decimal context tokens in use; empty when unknown
+window    = decimal context window in tokens; empty when unknown
+subagents = decimal count of the session's running subagents
+name      = up to MAX_TEXT_LEN bytes of UTF-8 without control characters
 ```
 
-`RS`, `US` and `GS` are the ASCII separator bytes `0x1E`, `0x1F` and `0x1D`.
-For example, with `␞`, `␟` and `␝` standing for them:
+`RS` and `US` are the ASCII separator bytes `0x1E` and `0x1F`. For example,
+with `␞` and `␟` standing for them:
 
 ```text
-70ea cb␟3883␟434611␟1000000␟Agent Deck Dev␟Explore␝Summarize esp32 book chapters␞pi␟1800␟␟␟agent-deck␞
+8666 cb␟3883␟434611␟1000000␟1␟Agent Deck Dev␞pi␟1800␟␟␟0␟agent-deck␞
 ```
 
 - **Checksum:** frames that fail it are dropped.
@@ -74,6 +76,5 @@ For example, with `␞`, `␟` and `␝` standing for them:
 | Constant | Value | Meaning |
 | -------- | ----- | ------- |
 | `MAX_SESSIONS` | 16 | Sessions per frame; the encoder drops the rest |
-| `MAX_SUBAGENTS` | 4 | Subagents per session; the encoder drops the rest |
-| `MAX_TEXT_LEN` | 32 | Bytes per text; the encoder cuts at a character boundary and turns control characters into spaces |
-| `MAX_FRAME_LEN` | 5814 | Largest possible frame, so both sides use a fixed buffer |
+| `MAX_TEXT_LEN` | 32 | Bytes per session name; the encoder cuts at a character boundary and turns control characters into spaces |
+| `MAX_FRAME_LEN` | 1926 | Largest possible frame, so both sides use a fixed buffer |

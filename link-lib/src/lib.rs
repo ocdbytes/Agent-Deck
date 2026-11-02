@@ -13,25 +13,23 @@
 //! A frame is one line of text:
 //!
 //! ```text
-//! frame    = crc " " body "\n"
-//! crc      = 4 lowercase hex digits: CRC-16/IBM-3740 of body
-//! body     = *(entry RS)
-//! entry    = agent status US uptime US used US window US name *(US subagent)
-//! subagent = text GS text            ; the subagent's type, then its description
-//! agent    = "c" (Claude Code) / "p" (pi) / "x" (Codex)
-//! status   = "b" (busy) / "i" (idle)
-//! uptime   = decimal seconds the session has run
-//! used     = decimal context tokens in use; empty when unknown
-//! window   = decimal context window in tokens; empty when unknown
-//! name     = text
-//! text     = up to MAX_TEXT_LEN bytes of UTF-8 without control characters
+//! frame     = crc " " body "\n"
+//! crc       = 4 lowercase hex digits: CRC-16/IBM-3740 of body
+//! body      = *(entry RS)
+//! entry     = agent status US uptime US used US window US subagents US name
+//! agent     = "c" (Claude Code) / "p" (pi) / "x" (Codex)
+//! status    = "b" (busy) / "i" (idle)
+//! uptime    = decimal seconds the session has run
+//! used      = decimal context tokens in use; empty when unknown
+//! window    = decimal context window in tokens; empty when unknown
+//! subagents = decimal count of the session's running subagents
+//! name      = up to MAX_TEXT_LEN bytes of UTF-8 without control characters
 //! ```
 //!
-//! `RS`, `US` and `GS` are the ASCII separator bytes 0x1E, 0x1F and 0x1D.
+//! `RS` and `US` are the ASCII separator bytes 0x1E and 0x1F.
 //!
-//! A frame holds at most [`MAX_SESSIONS`] entries of at most
-//! [`MAX_SUBAGENTS`] subagents each, so it is at most [`MAX_FRAME_LEN`] bytes
-//! and the deck receives it into a fixed buffer.
+//! A frame holds at most [`MAX_SESSIONS`] entries, so it is at most
+//! [`MAX_FRAME_LEN`] bytes and the deck receives it into a fixed buffer.
 
 #![no_std]
 #![warn(
@@ -41,25 +39,20 @@
     unreachable_pub
 )]
 
-use core::{fmt, mem, str};
+use core::{mem, str};
 
 /// Most sessions one frame carries.
 pub const MAX_SESSIONS: usize = 16;
 
-/// Most running subagents one session carries in a frame.
-pub const MAX_SUBAGENTS: usize = 4;
-
-/// Longest text in a frame (a session name, or a subagent's type or
-/// description), in bytes.
+/// Longest session name in a frame, in bytes.
 pub const MAX_TEXT_LEN: usize = 32;
 
 /// Longest frame, in bytes, including the closing newline.
 pub const MAX_FRAME_LEN: usize = BODY_START + MAX_SESSIONS * MAX_ENTRY_LEN + 1;
 
-/// Longest entry, in bytes: the two codes, three numbers with their
-/// separators, the name, the subagents and the closing `RS`.
-const MAX_ENTRY_LEN: usize =
-    2 + 3 * (1 + MAX_DIGITS) + 1 + MAX_TEXT_LEN + MAX_SUBAGENTS * (2 + 2 * MAX_TEXT_LEN) + 1;
+/// Longest entry, in bytes: the two codes, four numbers and the name with
+/// their separators, and the closing `RS`.
+const MAX_ENTRY_LEN: usize = 2 + 4 * (1 + MAX_DIGITS) + 1 + MAX_TEXT_LEN + 1;
 
 /// Most digits of a number in a frame: `u64::MAX` has 20.
 const MAX_DIGITS: usize = 20;
@@ -72,9 +65,6 @@ const RS: u8 = 0x1E;
 
 /// Separates the fields of an entry (ASCII unit separator).
 const US: u8 = 0x1F;
-
-/// Separates a subagent's type from its description (ASCII group separator).
-const GS: u8 = 0x1D;
 
 /// A coding agent whose sessions the deck shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -89,15 +79,6 @@ pub enum Agent {
 }
 
 impl Agent {
-    /// Returns the lowercase name shown for this agent.
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Claude => "claude",
-            Self::Pi => "pi",
-            Self::Codex => "codex",
-        }
-    }
-
     /// Returns the byte that stands for this agent in a frame.
     const fn code(self) -> u8 {
         match self {
@@ -115,12 +96,6 @@ impl Agent {
             b'x' => Some(Self::Codex),
             _ => None,
         }
-    }
-}
-
-impl fmt::Display for Agent {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
     }
 }
 
@@ -162,179 +137,69 @@ impl Status {
     }
 }
 
-impl fmt::Display for Status {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
 /// How much of its model's context window a session fills.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Context {
-    used: u64,
-    window: Option<u64>,
-}
-
-impl Context {
-    /// Creates a context of `used` tokens in a window of `window` tokens, if
-    /// the window is known.
-    pub const fn new(used: u64, window: Option<u64>) -> Self {
-        Self { used, window }
-    }
-
-    /// Returns the tokens of the session's last model request and its reply,
-    /// which is what the next request starts from.
-    pub const fn used(&self) -> u64 {
-        self.used
-    }
-
-    /// Returns the model's context window in tokens, or `None` if unknown.
-    pub const fn window(&self) -> Option<u64> {
-        self.window
-    }
+    /// Tokens of the session's last model request and its reply, which is
+    /// what the next request starts from.
+    pub used: u64,
+    /// The model's context window in tokens, or `None` if unknown.
+    pub window: Option<u64>,
 }
 
 /// One session as sent over the cable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Entry<'a> {
-    agent: Agent,
-    status: Status,
-    name: &'a str,
-    uptime: u64,
-    context: Option<Context>,
-    /// The subagent fields of a received entry; empty in a created one.
-    subagents: &'a str,
+    /// The agent running the session.
+    pub agent: Agent,
+    /// What the session is doing.
+    pub status: Status,
+    /// The session name. [`Encoder::push`] cuts it to [`MAX_TEXT_LEN`] bytes
+    /// at a character boundary and turns control characters into spaces.
+    pub name: &'a str,
+    /// How long the session has run, in seconds.
+    pub uptime: u64,
+    /// How much of its context window the session fills, or `None` before
+    /// its first model reply.
+    pub context: Option<Context>,
+    /// How many subagents the session is running.
+    pub subagents: usize,
 }
 
 impl<'a> Entry<'a> {
-    /// Creates an entry with no uptime, context or subagents.
-    /// [`Encoder::push`] shortens and cleans the name.
-    pub const fn new(agent: Agent, status: Status, name: &'a str) -> Self {
-        Self {
-            agent,
-            status,
-            name,
-            uptime: 0,
-            context: None,
-            subagents: "",
-        }
-    }
-
-    /// Sets how long the session has run, in seconds.
-    #[must_use]
-    pub const fn with_uptime(mut self, secs: u64) -> Self {
-        self.uptime = secs;
-        self
-    }
-
-    /// Sets how much of its context window the session fills.
-    #[must_use]
-    pub const fn with_context(mut self, context: Option<Context>) -> Self {
-        self.context = context;
-        self
-    }
-
-    /// Returns the agent running the session.
-    pub const fn agent(&self) -> Agent {
-        self.agent
-    }
-
-    /// Returns what the session is doing.
-    pub const fn status(&self) -> Status {
-        self.status
-    }
-
-    /// Returns the session name.
-    pub const fn name(&self) -> &'a str {
-        self.name
-    }
-
-    /// Returns how long the session has run, in seconds.
-    pub const fn uptime(&self) -> u64 {
-        self.uptime
-    }
-
-    /// Returns how much of its context window the session fills, or `None`
-    /// before its first model reply.
-    pub const fn context(&self) -> Option<Context> {
-        self.context
-    }
-
-    /// Returns the session's running subagents, in the order they were sent.
-    ///
-    /// Only a received entry has them; [`Encoder::push`] takes a created
-    /// entry's subagents separately.
-    pub fn subagents(self) -> impl Iterator<Item = SubagentEntry<'a>> {
-        // `parse` checked every subagent, so none is skipped here.
-        subagent_fields(self.subagents).filter_map(SubagentEntry::parse)
-    }
-
     /// Parses one entry of a received frame body.
     ///
-    /// Returns `None` if a field is missing, a code or number is invalid, a
-    /// text breaks the format, or there are too many subagents.
+    /// Returns `None` if a field is missing, a code or number is invalid, or
+    /// the name breaks the format.
     fn parse(entry: &'a str) -> Option<Self> {
         let mut fields = entry.splitn(6, char::from(US));
         let [agent, status] = *fields.next()?.as_bytes() else {
             return None;
         };
-        let agent = Agent::from_code(agent)?;
-        let status = Status::from_code(status)?;
         let uptime = fields.next()?.parse().ok()?;
         let context = match (fields.next()?, fields.next()?) {
             ("", "") => None,
-            (used, "") => Some(Context::new(used.parse().ok()?, None)),
-            (used, window) => Some(Context::new(used.parse().ok()?, Some(window.parse().ok()?))),
+            (used, "") => Some(Context {
+                used: used.parse().ok()?,
+                window: None,
+            }),
+            (used, window) => Some(Context {
+                used: used.parse().ok()?,
+                window: Some(window.parse().ok()?),
+            }),
         };
-        let name = fields.next().filter(|name| is_text(name))?;
-        let subagents = fields.next().unwrap_or_default();
-        all_parse(
-            subagent_fields(subagents),
-            MAX_SUBAGENTS,
-            SubagentEntry::parse,
-        )
-        .then_some(Self {
-            agent,
-            status,
+        let subagents = fields.next()?.parse().ok()?;
+        let name = fields
+            .next()
+            .filter(|name| name.len() <= MAX_TEXT_LEN && !name.chars().any(char::is_control))?;
+        Some(Self {
+            agent: Agent::from_code(agent)?,
+            status: Status::from_code(status)?,
             name,
             uptime,
             context,
             subagents,
         })
-    }
-}
-
-/// One running subagent of a session as sent over the cable.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SubagentEntry<'a> {
-    agent_type: &'a str,
-    description: &'a str,
-}
-
-impl<'a> SubagentEntry<'a> {
-    /// Creates a subagent entry. [`Encoder::push`] shortens and cleans both
-    /// texts.
-    pub const fn new(agent_type: &'a str, description: &'a str) -> Self {
-        Self {
-            agent_type,
-            description,
-        }
-    }
-
-    /// Returns the kind of subagent, such as `general-purpose` or `Explore`.
-    pub const fn agent_type(&self) -> &'a str {
-        self.agent_type
-    }
-
-    /// Returns the short task description its session gave it.
-    pub const fn description(&self) -> &'a str {
-        self.description
-    }
-
-    /// Parses one subagent field of a received entry.
-    fn parse(field: &'a str) -> Option<Self> {
-        let (agent_type, description) = field.split_once(char::from(GS))?;
-        (is_text(agent_type) && is_text(description)).then_some(Self::new(agent_type, description))
     }
 }
 
@@ -356,17 +221,9 @@ impl<'b> Encoder<'b> {
         }
     }
 
-    /// Adds a session and its running subagents.
-    ///
-    /// Sessions after the first [`MAX_SESSIONS`] and subagents after the
-    /// first [`MAX_SUBAGENTS`] are dropped. Each text is cut to
-    /// [`MAX_TEXT_LEN`] bytes at a character boundary, and control characters
-    /// in it become spaces.
-    pub fn push<'s>(
-        &mut self,
-        entry: &Entry<'_>,
-        subagents: impl IntoIterator<Item = SubagentEntry<'s>>,
-    ) {
+    /// Adds a session. Sessions after the first [`MAX_SESSIONS`] are
+    /// dropped.
+    pub fn push(&mut self, entry: &Entry<'_>) {
         if self.sessions == MAX_SESSIONS {
             return;
         }
@@ -384,13 +241,9 @@ impl<'b> Encoder<'b> {
             self.put_number(window);
         }
         self.put(US);
+        self.put_number(entry.subagents as u64);
+        self.put(US);
         self.put_text(entry.name);
-        for subagent in subagents.into_iter().take(MAX_SUBAGENTS) {
-            self.put(US);
-            self.put_text(subagent.agent_type);
-            self.put(GS);
-            self.put_text(subagent.description);
-        }
         self.put(RS);
     }
 
@@ -464,50 +317,25 @@ impl<'a> Frame<'a> {
     }
 
     /// Checks one received line (without its newline) and wraps it.
-    fn parse(line: &'a [u8]) -> Result<Self, Error> {
-        let (head, body) = line.split_at_checked(BODY_START).ok_or(Error::Malformed)?;
-        let crc = match head {
-            [hex @ .., b' '] => str::from_utf8(hex)
-                .ok()
-                .and_then(|hex| u16::from_str_radix(hex, 16).ok())
-                .ok_or(Error::Malformed)?,
-            _ => return Err(Error::Malformed),
+    ///
+    /// Returns `None` if the line does not follow the format or its checksum
+    /// does not match: bytes were lost or changed on the cable.
+    fn parse(line: &'a [u8]) -> Option<Self> {
+        let (head, body) = line.split_at_checked(BODY_START)?;
+        let [hex @ .., b' '] = head else {
+            return None;
         };
+        let crc = u16::from_str_radix(str::from_utf8(hex).ok()?, 16).ok()?;
         if crc16(body) != crc {
-            return Err(Error::Checksum);
+            return None;
         }
-        let body = str::from_utf8(body).map_err(|_| Error::Malformed)?;
-        let entries = body.split_terminator(char::from(RS));
-        if !all_parse(entries, MAX_SESSIONS, Entry::parse) {
-            return Err(Error::Malformed);
-        }
-        Ok(Self { body })
+        let body = str::from_utf8(body).ok()?;
+        let mut entries = body.split_terminator(char::from(RS));
+        let valid = entries.clone().count() <= MAX_SESSIONS
+            && entries.all(|entry| Entry::parse(entry).is_some());
+        valid.then_some(Self { body })
     }
 }
-
-/// Why a received frame was dropped.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum Error {
-    /// The frame was longer than [`MAX_FRAME_LEN`].
-    TooLong,
-    /// The checksum did not match: bytes were lost or changed on the cable.
-    Checksum,
-    /// The frame does not follow the format.
-    Malformed,
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::TooLong => "frame too long",
-            Self::Checksum => "frame checksum mismatch",
-            Self::Malformed => "malformed frame",
-        })
-    }
-}
-
-impl core::error::Error for Error {}
 
 /// Splits the bytes received from the cable into frames.
 #[derive(Debug)]
@@ -528,14 +356,13 @@ impl Decoder {
         }
     }
 
-    /// Adds one received byte and returns the frame it completes, if any.
+    /// Adds one received byte and returns the intact frame it completes, if
+    /// any.
     ///
-    /// # Errors
-    ///
-    /// Returns an error when the byte ends a frame that was too long, damaged
-    /// or malformed. The decoder then carries on with the next frame, so a
-    /// frame cut off at power-up is dropped this way too.
-    pub fn push(&mut self, byte: u8) -> Option<Result<Frame<'_>, Error>> {
+    /// A frame that is too long, damaged or malformed is dropped, and the
+    /// decoder carries on with the next one, so a frame cut off at power-up
+    /// is dropped this way too.
+    pub fn push(&mut self, byte: u8) -> Option<Frame<'_>> {
         if byte != b'\n' {
             match self.buf.get_mut(self.len) {
                 Some(slot) => {
@@ -548,9 +375,9 @@ impl Decoder {
         }
         let len = mem::take(&mut self.len);
         if mem::take(&mut self.too_long) {
-            return Some(Err(Error::TooLong));
+            return None;
         }
-        Some(Frame::parse(&self.buf[..len]))
+        Frame::parse(&self.buf[..len])
     }
 }
 
@@ -558,29 +385,6 @@ impl Default for Decoder {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// Returns the subagent fields of an entry's subagent part.
-fn subagent_fields(subagents: &str) -> impl Iterator<Item = &str> + Clone {
-    subagents
-        .split(char::from(US))
-        .filter(|field| !field.is_empty())
-}
-
-/// Returns whether `text` fits a text field: at most [`MAX_TEXT_LEN`] bytes
-/// without control characters.
-fn is_text(text: &str) -> bool {
-    text.len() <= MAX_TEXT_LEN && !text.chars().any(char::is_control)
-}
-
-/// Returns whether `items` holds at most `max` items and `parse` accepts
-/// each.
-fn all_parse<'a, T>(
-    mut items: impl Iterator<Item = &'a str> + Clone,
-    max: usize,
-    parse: impl Fn(&'a str) -> Option<T>,
-) -> bool {
-    items.clone().count() <= max && items.all(|item| parse(item).is_some())
 }
 
 /// Returns the CRC-16/IBM-3740 (also called CRC-16/CCITT-FALSE) of `bytes`.
@@ -594,4 +398,43 @@ fn crc16(bytes: &[u8]) -> u16 {
             }
         })
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decodes_what_it_encodes() {
+        let sent = [
+            Entry {
+                agent: Agent::Claude,
+                status: Status::Busy,
+                name: "agent-deck",
+                uptime: 3_600,
+                context: Some(Context {
+                    used: 250_000,
+                    window: Some(1_000_000),
+                }),
+                subagents: 5,
+            },
+            Entry {
+                agent: Agent::Pi,
+                status: Status::Idle,
+                name: "notes",
+                uptime: 0,
+                context: None,
+                subagents: 0,
+            },
+        ];
+        let mut buf = [0; MAX_FRAME_LEN];
+        let mut encoder = Encoder::new(&mut buf);
+        sent.iter().for_each(|entry| encoder.push(entry));
+        let (end, line) = encoder.finish().split_last().unwrap();
+
+        let mut decoder = Decoder::new();
+        assert!(line.iter().all(|&byte| decoder.push(byte).is_none()));
+        let frame = decoder.push(*end).expect("an intact frame");
+        assert!(frame.entries().eq(sent));
+    }
 }
