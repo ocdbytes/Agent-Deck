@@ -1,0 +1,37 @@
+[package]
+name = "agent-deck-firmware"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+publish = false
+
+[[bin]]
+name = "agent-deck-firmware"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+# `unstable` is needed to read the UART: `UartRx::with_rx` and `read_buffered`.
+esp-hal = { version = "~1.1.0", features = ["esp32", "log-04", "unstable"] }
+esp-bootloader-esp-idf = { version = "0.5.0", features = ["esp32", "log-04"] }
+esp-println = { version = "0.17.0", features = ["esp32", "log-04"] }
+log = "0.4.27"
+
+deck = { path = "../deck" }
+embedded-graphics = "0.8"
+embedded-hal = "1.0"
+embedded-hal-bus = "0.3"
+frames = { git = "https://github.com/ocdbytes/esp32-libs.git" }
+mipidsi = "0.10"
+static_cell = "2.1"
+
+[profile.dev]
+# The default debug profile is too slow and too big for the ESP32.
+opt-level = "s"
+
+[profile.release]
+codegen-units = 1 # Better optimization from a single codegen unit.
+debug = 2         # Keep symbols for backtraces; they are not flashed.
+lto = "fat"
+opt-level = "s"

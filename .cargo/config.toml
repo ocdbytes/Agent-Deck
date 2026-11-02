@@ -1,0 +1,4 @@
+[env]
+# The `sim` feature builds SDL2 from source; its CMakeLists predates CMake 4,
+# which refuses to configure it without this.
+CMAKE_POLICY_VERSION_MINIMUM = "3.5"

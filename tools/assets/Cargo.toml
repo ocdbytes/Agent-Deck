@@ -1,0 +1,13 @@
+[package]
+name = "assets"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+fontdue = "0.9.5"
+resvg = "0.49.0"
+
+# Standalone: kept out of the main workspace so its dependencies do not
+# affect the workspace MSRV or the firmware build.
+[workspace]
