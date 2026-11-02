@@ -24,8 +24,10 @@ use std::{error::Error, fmt::Write as _, fs, io::Cursor, path::Path, process::Co
 use fontdue::{Font, FontSettings};
 use resvg::{tiny_skia, usvg};
 
-/// IBM Plex Mono, for body text.
-const PLEX_MONO: &str = "fonts/ibmplexmono/IBMPlexMono-Regular.ttf";
+/// Ark Pixel's 12 px monospaced Latin font, for body text, cut down to the
+/// characters of [`FONTS`]' `BODY`. Drawn on a 12 px grid, every stroke is a
+/// whole pixel, fully lit.
+const ARK_PIXEL: &str = "fonts/arkpixel/ark-pixel-12px-monospaced-latin.ttf";
 
 /// DotGothic16, a pixel font drawn on a 16 px grid, for numbers and kanji.
 const DOTGOTHIC: &str = "fonts/dotgothic16/DotGothic16-Regular.ttf";
@@ -49,17 +51,18 @@ struct FontSpec {
 }
 
 /// The fonts the deck draws with. DotGothic16's pixels land almost on whole
-/// pixels at 32 px, and are read one by one at 16 px; Plex Mono at 35/3 px
-/// has a whole 7 px advance.
+/// pixels at 32 px, and are read one by one at 16 px, as is Ark Pixel at
+/// its 12 px.
 const FONTS: &[FontSpec] = &[
     FontSpec {
         name: "BODY",
-        doc: "IBM Plex Mono for body text: ASCII and `…`.",
-        file: PLEX_MONO,
-        px: 35.0 / 3.0,
+        doc: "Ark Pixel at its 12 px pixel size, pixel for pixel, for body text: \
+              ASCII and `…`.",
+        file: ARK_PIXEL,
+        px: 12.0,
         chars: " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`\
                 abcdefghijklmnopqrstuvwxyz{|}~…",
-        pixel: false,
+        pixel: true,
     },
     FontSpec {
         name: "NUMERAL",

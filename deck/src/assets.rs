@@ -4,12 +4,12 @@
 
 use crate::draw::{Font, Image, SpriteSheet};
 
-/// IBM Plex Mono for body text: ASCII and `…`.
+/// Ark Pixel at its 12 px pixel size, pixel for pixel, for body text: ASCII and `…`.
 pub(crate) const BODY: Font = Font {
     chars: " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~…",
-    width: 7,
-    height: 13,
-    baseline: 10,
+    width: 6,
+    height: 11,
+    baseline: 9,
     data: include_bytes!("../assets/gen/body.bin"),
 };
 
