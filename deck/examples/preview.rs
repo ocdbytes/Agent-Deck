@@ -3,9 +3,9 @@
 //!
 //! Run with `cargo run -p deck --example preview --features sim`.
 
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
-use deck::{Deck, SIZE, host};
+use deck::{Deck, FPS, SIZE, host};
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics_simulator::{
     OutputSettingsBuilder, SimulatorDisplay, SimulatorEvent, Window, sdl2::Keycode,
@@ -15,9 +15,6 @@ use link_lib::MAX_FRAME_LEN;
 
 /// How often to fetch the sessions, like the Mac side does for the deck.
 const INTERVAL: Duration = Duration::from_secs(1);
-
-/// Preview frame rate; keep it the same as the firmware's.
-const FPS: u32 = 30;
 
 /// Window pixels per panel pixel.
 const SCALE: u32 = 2;
@@ -39,7 +36,11 @@ fn main() {
         Some(byte)
     };
 
-    let mut deck = Deck::new(read);
+    // Any changing number will do to pick the Codex pets.
+    let seed = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.subsec_nanos());
+    let mut deck = Deck::new(read, seed);
     let mut display = SimulatorDisplay::<Rgb565>::new(SIZE);
     let mut window = Window::new(
         "agent-deck",

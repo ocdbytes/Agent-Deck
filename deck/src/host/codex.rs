@@ -15,31 +15,36 @@ use std::{
 
 use serde_json::Value;
 
-use super::{Agent, Context, Session, Status, created, dir_name, home_path, lsof};
+use super::{Agent, Context, Session, Sessions, Status, created, dir_name, home_path, lsof};
 
-/// Returns the Codex sessions running on this machine.
-///
-/// # Errors
-///
-/// Returns an error if `HOME` is not set or `lsof` cannot run.
-pub(super) fn sessions() -> io::Result<Vec<Session>> {
-    let locks = home_path(".codex/thread-writer-locks")?;
-    let mut threads: Vec<(u32, PathBuf)> = lsof(&["+d", &locks.to_string_lossy()])?
-        .into_iter()
-        .filter(|(_, path)| is_thread_lock(path))
-        .collect();
-    if threads.is_empty() {
-        return Ok(Vec::new());
+/// OpenAI Codex, as a source of [`Session`]s.
+pub(super) struct Codex;
+
+impl Sessions for Codex {
+    /// Returns the Codex sessions running on this machine.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `HOME` is not set or `lsof` cannot run.
+    fn sessions(&self) -> io::Result<Vec<Session>> {
+        let locks = home_path(".codex/thread-writer-locks")?;
+        let mut threads: Vec<(u32, PathBuf)> = lsof(&["+d", &locks.to_string_lossy()])?
+            .into_iter()
+            .filter(|(_, path)| is_thread_lock(path))
+            .collect();
+        if threads.is_empty() {
+            return Ok(Vec::new());
+        }
+        // A process can hold one file open more than once.
+        threads.sort();
+        threads.dedup();
+        let rollouts = home_path(".codex/sessions")?;
+        let names = thread_names(&home_path(".codex/session_index.jsonl")?);
+        Ok(threads
+            .iter()
+            .map(|(pid, lock)| session(*pid, lock, &rollouts, &names))
+            .collect())
     }
-    // A process can hold one file open more than once.
-    threads.sort();
-    threads.dedup();
-    let rollouts = home_path(".codex/sessions")?;
-    let names = thread_names(&home_path(".codex/session_index.jsonl")?);
-    Ok(threads
-        .iter()
-        .map(|(pid, lock)| session(*pid, lock, &rollouts, &names))
-        .collect())
 }
 
 /// Returns whether `path` is a thread's lock, not Codex's own

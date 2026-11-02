@@ -3,6 +3,7 @@ name = "agent-deck-firmware"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
+license = "MIT"
 publish = false
 
 [[bin]]

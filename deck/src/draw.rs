@@ -1,5 +1,5 @@
-//! Draws the glyphs and logos in [`crate::assets`] over the black background
-//! the deck clears to.
+//! Draws the glyphs, logos and sprites in [`crate::assets`] over the black
+//! background the deck clears to.
 
 use embedded_graphics::{
     pixelcolor::{Rgb565, raw::RawU16},
@@ -27,6 +27,37 @@ pub(crate) struct Font {
     /// Rows from the top of a glyph to the baseline.
     pub(crate) baseline: u32,
     pub(crate) data: &'static [u8],
+}
+
+/// Frames of sprite animations: `sprites` sprites, each with `animations`
+/// animations of `frames` frames. A frame is an [`Image`] of `width` by
+/// `height` pixels; frames are back to back, frame by frame, animation by
+/// animation and sprite by sprite.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SpriteSheet {
+    pub(crate) sprites: usize,
+    pub(crate) animations: usize,
+    pub(crate) frames: usize,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) data: &'static [u8],
+}
+
+impl SpriteSheet {
+    /// Returns frame `frame` of animation `animation` of sprite `sprite`, or
+    /// `None` if the sheet has no such frame.
+    pub(crate) fn frame(&self, sprite: usize, animation: usize, frame: usize) -> Option<Image> {
+        if sprite >= self.sprites || animation >= self.animations || frame >= self.frames {
+            return None;
+        }
+        let len = (self.width * self.height * 2) as usize;
+        let index = (sprite * self.animations + animation) * self.frames + frame;
+        Some(Image {
+            width: self.width,
+            height: self.height,
+            data: self.data.get(index * len..(index + 1) * len)?,
+        })
+    }
 }
 
 impl Font {

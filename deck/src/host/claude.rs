@@ -22,10 +22,10 @@ use std::{
 
 use serde_json::Value;
 
-use super::{Agent, Context, Session, Status, dir_name, home_path, processes};
+use super::{Agent, Context, Session, Sessions, Status, dir_name, home_path, processes};
 
 /// Context window of Claude models by model ID prefix, from Anthropic's model
-/// table of October 2026. Other models get no window.
+/// table of October 2026. Other models get [`DEFAULT_WINDOW`].
 // ponytail: hardcoded; add new models here, or read `max_input_tokens` from
 // the Models API if keeping this current becomes a chore.
 const WINDOWS: [(&str, u64); 10] = [
@@ -41,6 +41,9 @@ const WINDOWS: [(&str, u64); 10] = [
     ("claude-haiku-4-5", 200_000),
 ];
 
+/// Context window of a model missing from [`WINDOWS`].
+const DEFAULT_WINDOW: u64 = 1_000_000;
+
 /// How much of the end of a transcript to read for the last reply. Transcripts
 /// grow to tens of megabytes; one entry rarely passes 150 KB.
 // ponytail: a reply followed by more than this many bytes of entries shows no
@@ -54,30 +57,35 @@ const TAIL_LEN: u64 = 1 << 20;
 // finish was pushed out of the transcript tail shows as running until then.
 const RECENT: Duration = Duration::from_secs(15 * 60);
 
-/// Returns the Claude Code sessions running on this machine.
-///
-/// # Errors
-///
-/// Returns an error if `HOME` is not set, the session directory exists but
-/// cannot be read, or `ps` cannot run.
-pub(super) fn sessions() -> io::Result<Vec<Session>> {
-    let entries = match fs::read_dir(home_path(".claude/sessions")?) {
-        Ok(entries) => entries,
-        // No directory means Claude Code has not run on this machine.
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(err) => return Err(err),
-    };
-    let running: HashSet<u32> = processes()?
-        .into_iter()
-        .map(|process| process.pid)
-        .collect();
-    let projects = home_path(".claude/projects")?;
-    Ok(entries
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
-        .filter_map(|path| session(&fs::read_to_string(path).ok()?, &running, &projects))
-        .collect())
+/// Claude Code, as a source of [`Session`]s.
+pub(super) struct Claude;
+
+impl Sessions for Claude {
+    /// Returns the Claude Code sessions running on this machine.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `HOME` is not set, the session directory exists but
+    /// cannot be read, or `ps` cannot run.
+    fn sessions(&self) -> io::Result<Vec<Session>> {
+        let entries = match fs::read_dir(home_path(".claude/sessions")?) {
+            Ok(entries) => entries,
+            // No directory means Claude Code has not run on this machine.
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(err) => return Err(err),
+        };
+        let running: HashSet<u32> = processes()?
+            .into_iter()
+            .map(|process| process.pid)
+            .collect();
+        let projects = home_path(".claude/projects")?;
+        Ok(entries
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
+            .filter_map(|path| session(&fs::read_to_string(path).ok()?, &running, &projects))
+            .collect())
+    }
 }
 
 /// Builds the session described by one session file.
@@ -157,7 +165,7 @@ fn context(tail: &str) -> Option<Context> {
             .sum::<u64>();
             (used > 0).then(|| Context {
                 used,
-                window: message["model"].as_str().and_then(window),
+                window: Some(window(message["model"].as_str().unwrap_or_default())),
             })
         })
 }
@@ -207,13 +215,13 @@ fn finished(tail: &str, id: &str) -> bool {
     })
 }
 
-/// Returns the context window of Claude model `model`, if it is in
-/// [`WINDOWS`].
-fn window(model: &str) -> Option<u64> {
+/// Returns the context window of Claude model `model` from [`WINDOWS`], or
+/// [`DEFAULT_WINDOW`] if it is not listed.
+fn window(model: &str) -> u64 {
     WINDOWS
         .iter()
         .find(|(prefix, _)| model.starts_with(prefix))
-        .map(|(_, window)| *window)
+        .map_or(DEFAULT_WINDOW, |(_, window)| *window)
 }
 
 /// Returns the last `len` bytes of the file at `path`, without the partial

@@ -15,7 +15,7 @@
 use deck::Deck;
 use embedded_graphics::{
     framebuffer::{Framebuffer, buffer_size},
-    image::Image,
+    image::{GetPixel, Image},
     pixelcolor::{
         Rgb565,
         raw::{BigEndian, RawU16},
@@ -27,6 +27,7 @@ use esp_hal::clock::CpuClock;
 use esp_hal::delay::Delay;
 use esp_hal::gpio::{Input, InputConfig, Level, Output, OutputConfig, Pull};
 use esp_hal::main;
+use esp_hal::rng::Rng;
 use esp_hal::spi::master::{Config as SpiConfig, Spi};
 use esp_hal::time::{Duration, Instant, Rate};
 use esp_hal::uart::{Config as UartConfig, UartRx};
@@ -65,6 +66,9 @@ const BAUD: u32 = 115_200;
 /// How long a button must have been released for a press to count, so
 /// contact bounce does not turn several pages.
 const DEBOUNCE: Duration = Duration::from_millis(50);
+
+/// Time between animation ticks, at the deck's frame rate.
+const TICK: Duration = Duration::from_millis(1000 / deck::FPS as u64);
 
 /// Off-screen frame the deck draws into; sent to the panel in one write.
 type Frame =
@@ -140,11 +144,18 @@ fn main() -> ! {
     let mut rx = UartRx::new(peripherals.UART0, UartConfig::default().with_baudrate(BAUD))
         .unwrap()
         .with_rx(peripherals.GPIO3);
-    let mut deck = Deck::new(move || {
-        let mut byte = [0];
-        // An overflow loses bytes; the frame's checksum then drops the frame.
-        matches!(rx.read_buffered(&mut byte), Ok(1)).then_some(byte[0])
-    });
+    // Without Wi-Fi or Bluetooth running the RNG is only pseudo-random, which
+    // is enough to vary the Codex pets between boots.
+    let seed = Rng::new().random();
+    let mut deck = Deck::new(
+        move || {
+            let mut byte = [0];
+            // An overflow loses bytes; the frame's checksum then drops the
+            // frame.
+            matches!(rx.read_buffered(&mut byte), Ok(1)).then_some(byte[0])
+        },
+        seed,
+    );
     let pull_up = InputConfig::default().with_pull(Pull::Up);
     let mut left = Button::new(Input::new(peripherals.GPIO32, pull_up));
     let mut right = Button::new(Input::new(peripherals.GPIO33, pull_up));
@@ -152,6 +163,7 @@ fn main() -> ! {
 
     let frame = FRAME.take();
     let mut redraw = true;
+    let mut last_tick = Instant::now();
     loop {
         redraw |= deck.receive();
         if left.pressed() {
@@ -163,14 +175,29 @@ fn main() -> ! {
             redraw = true;
         }
 
-        // Redraw only on changes: the Mac sends about one frame a second, so
-        // the UART is idle while the panel is written.
+        // Redraw the whole panel only on changes: the Mac sends about one
+        // frame a second, so the UART is idle while the panel is written.
         if redraw {
             redraw = false;
             let Ok(()) = frame.clear(Rgb565::BLACK);
             let Ok(()) = deck.draw(frame);
             if let Err(e) = Image::new(&frame.as_image(), Point::zero()).draw(&mut display) {
                 log::warn!("display write failed: {e:?}");
+            }
+        } else if last_tick.elapsed() >= TICK {
+            // Between full redraws, write only the animations: a few small
+            // areas, short enough for the UART's FIFO to hold what arrives
+            // meanwhile.
+            last_tick = Instant::now();
+            deck.tick();
+            let Ok(()) = deck.draw_sprites(frame);
+            for area in deck.sprite_areas() {
+                let colors = area
+                    .points()
+                    .map(|point| frame.pixel(point).unwrap_or_default());
+                if let Err(e) = display.fill_contiguous(&area, colors) {
+                    log::warn!("display write failed: {e:?}");
+                }
             }
         }
     }

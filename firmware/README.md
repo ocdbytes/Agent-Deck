@@ -55,10 +55,14 @@ before starting `agent-deck`.
 
 - **Input:** the Mac sends a frame about once a second. Each loop reads the
   UART's waiting bytes into the deck without blocking.
-- **Redraws:** the deck redraws only when a new frame arrives or the page
-  changes, so the panel does not flicker and the UART is idle while the
-  panel is written. A frame lost to a full UART buffer fails its checksum,
-  and the next one replaces it.
+- **Redraws:** the deck redraws the whole panel only when a new frame
+  arrives or the page changes, so the panel does not flicker and the UART is
+  idle while the panel is written. A frame lost to a full UART buffer fails
+  its checksum, and the next one replaces it.
+- **Animations:** 30 times a second (`deck::FPS`) the deck advances its
+  animations and writes only their areas, the Claude Code mascots and Codex
+  pets on the page: about 3.2 KB each, short enough for the UART's 128-byte
+  FIFO to hold the bytes that arrive meanwhile.
 - **Paging:** each press of the left button shows the previous page and
   each press of the right one the next, with 50 ms of debounce.
 

@@ -2,10 +2,12 @@
 name = "assets"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
 publish = false
 
 [dependencies]
 fontdue = "0.9.5"
+image-webp = "0.2.4"
 resvg = "0.49.0"
 
 # Standalone: kept out of the main workspace so its dependencies do not

@@ -9,6 +9,13 @@
 //!
 //! These files are internal to each agent and may change between versions.
 //! The modules run `ps` and `lsof`, so they work on macOS and Linux.
+//!
+//! Each module has a unit struct implementing `Sessions`. To add an agent:
+//!
+//! 1. Add its variant and frame byte to [`Agent`].
+//! 2. Add its logo to the `match` in `draw_session`.
+//! 3. Add a module with a unit struct implementing `Sessions`.
+//! 4. List that struct in `AGENTS`.
 
 mod claude;
 mod codex;
@@ -34,8 +41,8 @@ use link_lib::{Agent, Context, Encoder, Entry, MAX_FRAME_LEN, Status};
 /// Returns an error if an agent's sessions cannot be fetched.
 pub fn frame(buf: &mut [u8; MAX_FRAME_LEN]) -> io::Result<&[u8]> {
     let mut sessions = Vec::new();
-    for fetch in [claude::sessions, pi::sessions, codex::sessions] {
-        sessions.extend(fetch()?);
+    for agent in AGENTS {
+        sessions.extend(agent.sessions()?);
     }
     sessions.sort_by_key(|session| session.started);
     let mut encoder = Encoder::new(buf);
@@ -69,6 +76,23 @@ pub fn run(mut port: impl Write, interval: Duration) -> io::Result<Infallible> {
     }
 }
 
+/// A coding agent whose running sessions the host can fetch.
+///
+/// Each agent module defines one unit struct that implements this trait.
+/// Only implementors can be listed in [`AGENTS`], so a new agent's sessions
+/// reach the deck only once it implements this trait.
+trait Sessions {
+    /// Returns the agent's sessions running on this machine.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the agent's session state cannot be read.
+    fn sessions(&self) -> io::Result<Vec<Session>>;
+}
+
+/// Every agent whose sessions are sent to the deck.
+const AGENTS: [&dyn Sessions; 3] = [&claude::Claude, &pi::Pi, &codex::Codex];
+
 /// One running agent session.
 struct Session {
     agent: Agent,
@@ -76,11 +100,7 @@ struct Session {
     name: String,
     status: Status,
     started: SystemTime,
-    /// How much of its context window the session fills, or `None` before
-    /// its first model reply.
     context: Option<Context>,
-    /// How many subagents the session started that are still running. Only
-    /// Claude Code reports them; pi has none, and Codex's are not read yet.
     subagents: usize,
 }
 
@@ -124,6 +144,9 @@ struct Process {
 }
 
 /// Returns every running process.
+/// Not the best option but the lightest option
+/// for our purposes.
+/// SAFE FOR CURRENT PROJECT USECASE
 fn processes() -> io::Result<Vec<Process>> {
     let output = stdout("ps", &["-axww", "-o", "pid=,etime=,args="])?;
     let now = SystemTime::now();

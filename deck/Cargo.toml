@@ -3,6 +3,7 @@ name = "deck"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 
 [features]
 # Mac side: find this Mac's sessions and send them over the serial port.

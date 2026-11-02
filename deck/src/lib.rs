@@ -9,6 +9,13 @@
 //! The panel is a 2×2 grid: three session tiles per page and a summary tile.
 //! A session tile shows the agent's logo, its running subagents, its status,
 //! its name, how much of its context window it fills and how long it has run.
+//! In place of a logo, Claude Code shows its animated mascot and Codex one of
+//! the pets from its terminal UI, picked at random per session.
+//!
+//! Animations advance one tick per [`Scene::update`], [`FPS`] times a second.
+//! Firmware that redraws the whole panel only on changes calls [`Deck::tick`]
+//! itself and in between redraws only [`Deck::sprite_areas`], with
+//! [`Deck::draw_sprites`].
 //! The summary shows the page, how many sessions are busy and idle, and their
 //! total context tokens.
 //!
@@ -27,71 +34,23 @@ mod assets;
 mod draw;
 #[cfg(feature = "host")]
 pub mod host;
+mod ui;
 
-use core::fmt::{self, Write as _};
+use core::fmt;
 
-use embedded_graphics::{
-    pixelcolor::Rgb565,
-    prelude::*,
-    primitives::{Circle, Line, PrimitiveStyle, Rectangle},
-};
+use embedded_graphics::{pixelcolor::Rgb565, prelude::*, primitives::Rectangle};
 use frames::Scene;
 use heapless::{String, Vec};
 use link_lib::{Agent, Context, Decoder, MAX_SESSIONS, MAX_TEXT_LEN, Status};
 
-use crate::{
-    assets::{
-        BODY, CLAUDE, CLAUDE_SMALL, KANJI, NUMERAL, OPENAI, OPENAI_SMALL, PERCENT, PI, PI_SMALL,
-    },
-    draw::Image,
-};
+use crate::ui::PER_PAGE;
 
 /// Panel size in pixels, in portrait orientation.
 pub const SIZE: Size = Size::new(240, 320);
 
-/// Width of a tile in the 2×2 grid, in pixels.
-const TILE_W: i32 = 120;
-
-/// Height of a tile in the 2×2 grid, in pixels.
-const TILE_H: i32 = 160;
-
-/// Space between a tile's edge and its content, in pixels.
-const PAD: i32 = 8;
-
-/// Sessions per page: three tiles, with the fourth showing the summary.
-const PER_PAGE: usize = 3;
-
-/// Context use, in percent, from which a session shows in vermilion.
-const WARN_PERCENT: u64 = 80;
-
-/// Most subagents drawn as one small logo each; more show as one logo and a
-/// count, such as `x5`.
-const MAX_SUBAGENT_LOGOS: usize = 3;
-
-/// Space between small subagent logos, and before the count, in pixels.
-const SUBAGENT_GAP: i32 = 2;
-
-/// Values and names.
-const TEXT: Rgb565 = rgb(0xE8E4DC);
-
-/// Labels and idle sessions.
-const DIM: Rgb565 = rgb(0x8A8780);
-
-/// Busy sessions.
-const GREEN: Rgb565 = rgb(0x9BD67F);
-
-/// Kanji accents and context warnings.
-const VERMILION: Rgb565 = rgb(0xE5603B);
-
-/// Lines between tiles.
-const RULE: Rgb565 = rgb(0x2E2E2E);
-
-/// The empty part of a context bar.
-const TRACK: Rgb565 = rgb(0x3A3A3A);
-
-/// Text the deck builds for one value. 40 bytes fit the longest: a context
-/// of two 17-character token counts and a slash.
-type Label = String<40>;
+/// Animation ticks per second: how often to call [`Deck::tick`], or
+/// [`Scene::update`], for animations to run at their speed.
+pub const FPS: u32 = 30;
 
 /// One session as the deck keeps it between frames.
 #[derive(Debug)]
@@ -102,6 +61,8 @@ struct Row {
     uptime: u64,
     context: Option<Context>,
     subagents: usize,
+    /// Picks the session's random animation; see [`ui::session_hash`].
+    hash: u32,
 }
 
 /// The deck display: keeps the latest session list and draws it, a page at
@@ -111,6 +72,10 @@ pub struct Deck<R> {
     decoder: Decoder,
     rows: Vec<Row, MAX_SESSIONS>,
     page: usize,
+    /// Picks each session's random animation; see [`ui::session_hash`].
+    seed: u32,
+    /// Animation ticks so far.
+    tick: u32,
 }
 
 impl<R> Deck<R> {
@@ -124,6 +89,31 @@ impl<R> Deck<R> {
         self.page = (self.page + self.pages() - 1) % self.pages();
     }
 
+    /// Advances the animations by one tick, a [`FPS`]th of a second.
+    pub fn tick(&mut self) {
+        self.tick = self.tick.wrapping_add(1);
+    }
+
+    /// Returns the areas of the panel that animate, which
+    /// [`draw_sprites`](Self::draw_sprites) redraws.
+    pub fn sprite_areas(&self) -> impl Iterator<Item = Rectangle> + '_ {
+        ui::sprite_areas(&self.rows, self.page)
+    }
+
+    /// Redraws only the animations, onto a `target` that holds the last
+    /// full [`Scene::draw`]: clears each of
+    /// [`sprite_areas`](Self::sprite_areas) and draws its current frame.
+    ///
+    /// # Errors
+    ///
+    /// Returns the target's error if a draw call fails.
+    pub fn draw_sprites<D>(&self, target: &mut D) -> Result<(), D::Error>
+    where
+        D: DrawTarget<Color = Rgb565>,
+    {
+        ui::draw_sprites(target, &self.rows, self.page, self.tick)
+    }
+
     /// Returns how many pages the sessions fill; at least one.
     fn pages(&self) -> usize {
         self.rows.len().div_ceil(PER_PAGE).max(1)
@@ -135,12 +125,17 @@ impl<R: FnMut() -> Option<u8>> Deck<R> {
     ///
     /// `read` returns the next received byte, or `None` when none is waiting.
     /// It must not block, or the display stops updating.
-    pub fn new(read: R) -> Self {
+    ///
+    /// `seed` picks each session's random animation; a random one gives
+    /// different picks on each run.
+    pub fn new(read: R, seed: u32) -> Self {
         Self {
             read,
             decoder: Decoder::new(),
             rows: Vec::new(),
             page: 0,
+            seed,
+            tick: 0,
         }
     }
 
@@ -158,7 +153,13 @@ impl<R: FnMut() -> Option<u8>> Deck<R> {
                 self.rows = frame
                     .entries()
                     .take(MAX_SESSIONS)
-                    .filter_map(|entry| {
+                    .enumerate()
+                    .filter_map(|(i, entry)| {
+                        let nth = frame
+                            .entries()
+                            .take(i)
+                            .filter(|earlier| earlier.name == entry.name)
+                            .count();
                         Some(Row {
                             agent: entry.agent,
                             status: entry.status,
@@ -166,6 +167,7 @@ impl<R: FnMut() -> Option<u8>> Deck<R> {
                             uptime: entry.uptime,
                             context: entry.context,
                             subagents: entry.subagents,
+                            hash: ui::session_hash(entry.name, nth, self.seed),
                         })
                     })
                     .collect();
@@ -182,25 +184,14 @@ impl<R: FnMut() -> Option<u8>> Scene for Deck<R> {
 
     fn update(&mut self) {
         self.receive();
+        self.tick();
     }
 
     fn draw<D>(&self, target: &mut D) -> Result<(), D::Error>
     where
         D: DrawTarget<Color = Rgb565>,
     {
-        let rule = PrimitiveStyle::with_stroke(RULE, 1);
-        let (width, height) = (SIZE.width as i32, SIZE.height as i32);
-        Line::new(Point::new(TILE_W, 0), Point::new(TILE_W, height - 1))
-            .into_styled(rule)
-            .draw(target)?;
-        Line::new(Point::new(0, TILE_H), Point::new(width - 1, TILE_H))
-            .into_styled(rule)
-            .draw(target)?;
-        let sessions = self.rows.iter().skip(self.page * PER_PAGE).take(PER_PAGE);
-        for (slot, row) in sessions.enumerate() {
-            draw_session(target, row, tile(slot))?;
-        }
-        draw_summary(target, &self.rows, self.page, self.pages(), tile(PER_PAGE))
+        ui::draw_page(target, &self.rows, self.page, self.pages(), self.tick)
     }
 }
 
@@ -213,322 +204,72 @@ impl<R> fmt::Debug for Deck<R> {
     }
 }
 
-/// Returns the top-left corner of tile `slot`, counting left to right, then
-/// top to bottom.
-fn tile(slot: usize) -> Point {
-    Point::new((slot % 2) as i32 * TILE_W, (slot / 2) as i32 * TILE_H)
-}
-
-/// Draws one session's tile with its top-left corner at `at`.
-fn draw_session<D>(target: &mut D, row: &Row, at: Point) -> Result<(), D::Error>
-where
-    D: DrawTarget<Color = Rgb565>,
-{
-    let (left, right) = (at.x + PAD, at.x + TILE_W - PAD);
-
-    let logos = match row.agent {
-        Agent::Claude => Some((CLAUDE, CLAUDE_SMALL)),
-        Agent::Pi => Some((PI, PI_SMALL)),
-        Agent::Codex => Some((OPENAI, OPENAI_SMALL)),
-        _ => None,
-    };
-    if let Some((logo, small)) = logos {
-        draw::image(target, logo, Point::new(left, at.y + PAD))?;
-        draw_subagents(target, small, row.subagents, right, at.y + PAD)?;
-    }
-
-    // ● 稼働 busy, or ○ 待機 idle.
-    let busy = row.status == Status::Busy;
-    let (color, kanji) = if busy {
-        (GREEN, "稼働")
-    } else {
-        (DIM, "待機")
-    };
-    let y = at.y + 54;
-    let dot = Circle::new(Point::new(left, y - 6), 6);
-    let dot_style = if busy {
-        PrimitiveStyle::with_fill(color)
-    } else {
-        PrimitiveStyle::with_stroke(color, 1)
-    };
-    dot.into_styled(dot_style).draw(target)?;
-    // Kanji sit a pixel under the Latin baseline, centring them on the text.
-    let x = draw::text(target, &KANJI, kanji, Point::new(left + 10, y + 1), color)?;
-    draw::text(
-        target,
-        &BODY,
-        row.status.as_str(),
-        Point::new(x + 4, y),
-        color,
-    )?;
-
-    draw_name(target, &row.name, Point::new(left, at.y + 70), right)?;
-
-    // Big percentage of the context window, rounded, and a bar of it.
-    let percent = row.context.and_then(|context| {
-        let window = context.window.filter(|&window| window > 0)?;
-        Some((context.used.saturating_mul(100) + window / 2) / window)
-    });
-    let color = if percent.is_some_and(|percent| percent >= WARN_PERCENT) {
-        VERMILION
-    } else {
-        TEXT
-    };
-    let mut digits = Label::new();
-    // invariant: a u64 has at most 20 digits, which fit a Label.
-    let _ = match percent {
-        Some(percent) => write!(digits, "{percent}"),
-        None => digits.write_str("--"),
-    };
-    let y = at.y + 112;
-    let x = draw::text(target, &NUMERAL, &digits, Point::new(left, y), color)?;
-    draw::text(target, &PERCENT, "%", Point::new(x, y), color)?;
-    let bar = at.y + 119;
-    Line::new(Point::new(left, bar), Point::new(right - 1, bar))
-        .into_styled(PrimitiveStyle::with_stroke(TRACK, 1))
-        .draw(target)?;
-    let filled = percent.unwrap_or(0).min(100) as i32 * (right - left) / 100;
-    Rectangle::new(Point::new(left, bar - 1), Size::new(filled as u32, 2))
-        .into_styled(PrimitiveStyle::with_fill(color))
-        .draw(target)?;
-
-    draw_row(
-        target,
-        "ctx",
-        &context_text(row.context),
-        at.y + 136,
-        left,
-        right,
-    )?;
-    draw_row(
-        target,
-        "up",
-        &uptime_text(row.uptime),
-        at.y + 152,
-        left,
-        right,
-    )
-}
-
-/// Draws a session's `count` running subagents as small `logo`s in a row
-/// ending at `right`, with their tops at `top`: one logo per subagent up to
-/// [`MAX_SUBAGENT_LOGOS`], or one logo and `x<count>` for more.
-fn draw_subagents<D>(
-    target: &mut D,
-    logo: Image,
-    count: usize,
-    right: i32,
-    top: i32,
-) -> Result<(), D::Error>
-where
-    D: DrawTarget<Color = Rgb565>,
-{
-    let mut x = right;
-    let logos = if count > MAX_SUBAGENT_LOGOS {
-        let mut text = Label::new();
-        // invariant: `x` and a usize of at most 20 digits fit a Label.
-        let _ = write!(text, "x{count}");
-        x -= BODY.text_width(&text);
-        // The count sits on the logos' bottom edge.
-        draw::text(
-            target,
-            &BODY,
-            &text,
-            Point::new(x, top + logo.height as i32),
-            TEXT,
-        )?;
-        x -= SUBAGENT_GAP;
-        1
-    } else {
-        count
-    };
-    for _ in 0..logos {
-        x -= logo.width as i32;
-        draw::image(target, logo, Point::new(x, top))?;
-        x -= SUBAGENT_GAP;
-    }
-    Ok(())
-}
-
-/// Draws the summary tile with its top-left corner at `at`: 今 now and the
-/// page, how many sessions are busy and idle, and their total context tokens.
-fn draw_summary<D>(
-    target: &mut D,
-    rows: &[Row],
-    page: usize,
-    pages: usize,
-    at: Point,
-) -> Result<(), D::Error>
-where
-    D: DrawTarget<Color = Rgb565>,
-{
-    let (left, right) = (at.x + PAD, at.x + TILE_W - PAD);
-
-    let y = at.y + 22;
-    let x = draw::text(target, &KANJI, "今", Point::new(left, y + 1), VERMILION)?;
-    draw::text(target, &BODY, "now", Point::new(x + 4, y), DIM)?;
-    let mut page_text = Label::new();
-    // invariant: two usize values and a slash fit a Label.
-    let _ = write!(page_text, "{}/{pages}", page + 1);
-    let x = right - BODY.text_width(&page_text);
-    draw::text(target, &BODY, &page_text, Point::new(x, y), DIM)?;
-
-    let busy = rows.iter().filter(|row| row.status == Status::Busy).count();
-    draw_count(target, busy, "busy", GREEN, Point::new(left, at.y + 74))?;
-    draw_count(
-        target,
-        rows.len() - busy,
-        "idle",
-        TEXT,
-        Point::new(left, at.y + 112),
-    )?;
-
-    Line::new(
-        Point::new(left, at.y + 138),
-        Point::new(right - 1, at.y + 138),
-    )
-    .into_styled(PrimitiveStyle::with_stroke(RULE, 1))
-    .draw(target)?;
-    let total = rows
-        .iter()
-        .filter_map(|row| row.context)
-        .map(|context| context.used)
-        .sum();
-    draw_row(target, "tok", &tokens_text(total), at.y + 152, left, right)
-}
-
-/// Draws a big `count` in `color` and a dim `label` after it, on the
-/// baseline at `origin`.
-fn draw_count<D>(
-    target: &mut D,
-    count: usize,
-    label: &str,
-    color: Rgb565,
-    origin: Point,
-) -> Result<(), D::Error>
-where
-    D: DrawTarget<Color = Rgb565>,
-{
-    let mut digits = Label::new();
-    // invariant: a usize has at most 20 digits, which fit a Label.
-    let _ = write!(digits, "{count}");
-    let x = draw::text(target, &NUMERAL, &digits, origin, color)?;
-    draw::text(target, &BODY, label, Point::new(x + 4, origin.y), DIM)?;
-    Ok(())
-}
-
-/// Draws `name` in corner brackets, 「name」, on the baseline at `origin`,
-/// cut short with `…` so it ends before `right`.
-fn draw_name<D>(target: &mut D, name: &str, origin: Point, right: i32) -> Result<(), D::Error>
-where
-    D: DrawTarget<Color = Rgb565>,
-{
-    let style = PrimitiveStyle::with_stroke(DIM, 1);
-    let top = origin.y - BODY.baseline as i32;
-    let bottom = top + BODY.height as i32 - 1;
-    // 「 is a corner at the top left.
-    Line::new(Point::new(origin.x, top), Point::new(origin.x + 3, top))
-        .into_styled(style)
-        .draw(target)?;
-    Line::new(Point::new(origin.x, top), Point::new(origin.x, top + 6))
-        .into_styled(style)
-        .draw(target)?;
-
-    let start = Point::new(origin.x + 5, origin.y);
-    let fits = ((right - start.x - 5) / BODY.width as i32) as usize;
-    let end = if name.chars().count() > fits {
-        let cut = name
-            .char_indices()
-            .nth(fits.saturating_sub(1))
-            .map_or(name.len(), |(i, _)| i);
-        let x = draw::text(target, &BODY, &name[..cut], start, TEXT)?;
-        draw::text(target, &BODY, "…", Point::new(x, origin.y), TEXT)?
-    } else {
-        draw::text(target, &BODY, name, start, TEXT)?
-    };
-
-    // 」 is a corner at the bottom right, just after the name.
-    let x = end + 2;
-    Line::new(Point::new(x, bottom - 6), Point::new(x, bottom))
-        .into_styled(style)
-        .draw(target)?;
-    Line::new(Point::new(x - 3, bottom), Point::new(x, bottom))
-        .into_styled(style)
-        .draw(target)?;
-    Ok(())
-}
-
-/// Draws a row on the baseline `y`: a dim `label` at `left` and a bright
-/// `value` ending at `right`.
-fn draw_row<D>(
-    target: &mut D,
-    label: &str,
-    value: &str,
-    y: i32,
-    left: i32,
-    right: i32,
-) -> Result<(), D::Error>
-where
-    D: DrawTarget<Color = Rgb565>,
-{
-    draw::text(target, &BODY, label, Point::new(left, y), DIM)?;
-    let x = right - BODY.text_width(value);
-    draw::text(target, &BODY, value, Point::new(x, y), TEXT)?;
-    Ok(())
-}
-
-/// Returns a session's context as `142k/200k`, as `142k` when the window is
-/// unknown, or as `-` before its first reply.
-fn context_text(context: Option<Context>) -> Label {
-    let Some(context) = context else {
-        return "-".try_into().unwrap_or_default();
-    };
-    let mut text = tokens_text(context.used);
-    if let Some(window) = context.window {
-        // invariant: two token counts of at most 17 bytes and a slash fit a
-        // Label.
-        let _ = write!(text, "/{}", tokens_text(window));
-    }
-    text
-}
-
-/// Returns a token count as `850`, `142k` or `1.2M`.
-fn tokens_text(tokens: u64) -> Label {
-    let mut text = Label::new();
-    // invariant: the longest result, `u64::MAX` as `18446744073709.5M`, is
-    // 17 bytes and fits a Label.
-    let _ = match tokens {
-        0..1_000 => write!(text, "{tokens}"),
-        1_000..1_000_000 => write!(text, "{}k", tokens / 1_000),
-        _ => match tokens / 100_000 {
-            tenths if tenths % 10 == 0 => write!(text, "{}M", tenths / 10),
-            tenths => write!(text, "{}.{}M", tenths / 10, tenths % 10),
+#[cfg(test)]
+mod tests {
+    use embedded_graphics::{
+        framebuffer::{Framebuffer, buffer_size},
+        pixelcolor::{
+            Rgb565,
+            raw::{BigEndian, RawU16},
         },
+        prelude::*,
     };
-    text
-}
+    use frames::Scene;
+    use link_lib::{Agent, Context, Encoder, Entry, MAX_FRAME_LEN, Status};
 
-/// Returns an uptime in seconds as `40m`, `2h 15m` or `3d 04h`.
-fn uptime_text(secs: u64) -> Label {
-    let (days, hours, minutes) = (secs / 86_400, secs / 3_600 % 24, secs / 60 % 60);
-    let mut text = Label::new();
-    // invariant: the longest result, 15 digits of days and `d 23h`, is 20
-    // bytes and fits a Label.
-    let _ = if days > 0 {
-        write!(text, "{days}d {hours:02}h")
-    } else if hours > 0 {
-        write!(text, "{hours}h {minutes:02}m")
-    } else {
-        write!(text, "{minutes}m")
-    };
-    text
-}
+    use super::{Deck, FPS, SIZE};
 
-/// Converts a `0xRRGGBB` color to RGB565.
-const fn rgb(hex: u32) -> Rgb565 {
-    Rgb565::new(
-        (hex >> 19) as u8 & 0x1F,
-        (hex >> 10) as u8 & 0x3F,
-        (hex >> 3) as u8 & 0x1F,
-    )
+    const WIDTH: usize = SIZE.width as usize;
+    const HEIGHT: usize = SIZE.height as usize;
+
+    /// The panel's pixels, as the firmware keeps them.
+    type Panel = Framebuffer<
+        Rgb565,
+        RawU16,
+        BigEndian,
+        WIDTH,
+        HEIGHT,
+        { buffer_size::<Rgb565>(WIDTH, HEIGHT) },
+    >;
+
+    /// [`Deck::draw_sprites`] over a full draw must change nothing, or the
+    /// firmware's partial redraws would erase what lies in the animation
+    /// areas.
+    #[test]
+    fn draw_sprites_matches_draw() {
+        let context = Some(Context {
+            used: 420_000,
+            window: Some(1_000_000),
+        });
+        let entry = |agent, status, subagents| Entry {
+            agent,
+            status,
+            name: "agent-deck",
+            uptime: 4_000,
+            context,
+            subagents,
+        };
+        let sent = [
+            entry(Agent::Claude, Status::Busy, 5),
+            entry(Agent::Codex, Status::Busy, 0),
+            entry(Agent::Codex, Status::Idle, 0),
+        ];
+        let mut buf = [0; MAX_FRAME_LEN];
+        let mut encoder = Encoder::new(&mut buf);
+        sent.iter().for_each(|entry| encoder.push(entry));
+        let mut bytes = encoder.finish().iter().copied();
+        let mut deck = Deck::new(move || bytes.next(), 7);
+        assert!(deck.receive());
+
+        let (mut full, mut partial) = (Panel::new(), Panel::new());
+        for tick in 0..3 * FPS {
+            for panel in [&mut full, &mut partial] {
+                let Ok(()) = panel.clear(Rgb565::BLACK);
+                let Ok(()) = deck.draw(panel);
+            }
+            let Ok(()) = deck.draw_sprites(&mut partial);
+            assert!(full.data() == partial.data(), "tick {tick}");
+            deck.tick();
+        }
+    }
 }

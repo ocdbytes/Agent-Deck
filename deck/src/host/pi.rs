@@ -13,33 +13,38 @@ use std::{
 
 use serde_json::Value;
 
-use super::{Agent, Context, Session, Status, dir_name, home_path, lsof, processes};
+use super::{Agent, Context, Session, Sessions, Status, dir_name, home_path, lsof, processes};
 
-/// Returns the pi sessions running on this machine.
-///
-/// # Errors
-///
-/// Returns an error if `HOME` is not set or `ps` or `lsof` cannot run.
-pub(super) fn sessions() -> io::Result<Vec<Session>> {
-    let started: HashMap<u32, SystemTime> = processes()?
-        .into_iter()
-        .filter(|process| is_pi(&process.args))
-        .map(|process| (process.pid, process.started))
-        .collect();
-    if started.is_empty() {
-        return Ok(Vec::new());
+/// The pi coding agent, as a source of [`Session`]s.
+pub(super) struct Pi;
+
+impl Sessions for Pi {
+    /// Returns the pi sessions running on this machine.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `HOME` is not set or `ps` or `lsof` cannot run.
+    fn sessions(&self) -> io::Result<Vec<Session>> {
+        let started: HashMap<u32, SystemTime> = processes()?
+            .into_iter()
+            .filter(|process| is_pi(&process.args))
+            .map(|process| (process.pid, process.started))
+            .collect();
+        if started.is_empty() {
+            return Ok(Vec::new());
+        }
+        let pids: Vec<String> = started.keys().map(u32::to_string).collect();
+        let root = home_path(".pi/agent/sessions")?;
+        // The model list only adds context windows, so a missing one is fine.
+        let models: Value = fs::read_to_string(home_path(".pi/agent/models-store.json")?)
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_default();
+        Ok(lsof(&["-a", "-d", "cwd", "-p", &pids.join(",")])?
+            .into_iter()
+            .filter_map(|(pid, cwd)| Some(session(&root, &cwd, *started.get(&pid)?, &models)))
+            .collect())
     }
-    let pids: Vec<String> = started.keys().map(u32::to_string).collect();
-    let root = home_path(".pi/agent/sessions")?;
-    // The model list only adds context windows, so a missing one is fine.
-    let models: Value = fs::read_to_string(home_path(".pi/agent/models-store.json")?)
-        .ok()
-        .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or_default();
-    Ok(lsof(&["-a", "-d", "cwd", "-p", &pids.join(",")])?
-        .into_iter()
-        .filter_map(|(pid, cwd)| Some(session(&root, &cwd, *started.get(&pid)?, &models)))
-        .collect())
 }
 
 /// Returns whether `args` is a pi command line.

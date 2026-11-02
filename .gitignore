@@ -1,2 +1,4 @@
 target/
 .DS_Store
+# Codex's pets are OpenAI's artwork; tools/assets downloads them.
+deck/assets/gen/pets.bin
