@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "agent-deck-firmware"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "deck",
  "embedded-graphics",
@@ -184,7 +184,7 @@ dependencies = [
 
 [[package]]
 name = "deck"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "embedded-graphics",
  "frames",
@@ -895,7 +895,7 @@ checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
 
 [[package]]
 name = "link-lib"
-version = "0.2.0"
+version = "0.3.0"
 
 [[package]]
 name = "litrs"
