@@ -7,11 +7,14 @@ pub const MAX_SESSIONS: usize = 16;
 pub const MAX_TEXT_LEN: usize = 32;
 
 /// Longest frame, in bytes, including the closing newline.
-pub const MAX_FRAME_LEN: usize = BODY_START + MAX_SESSIONS * MAX_ENTRY_LEN + 1;
+pub const MAX_FRAME_LEN: usize = BODY_START + CLOCK_LEN + MAX_SESSIONS * MAX_ENTRY_LEN + 1;
 
-/// Longest entry, in bytes: the two codes, four numbers and the name with
+/// Clock digits and their separator at the start of a frame body.
+const CLOCK_LEN: usize = 5;
+
+/// Longest entry, in bytes: the three codes, four numbers and the name with
 /// their separators, and the closing `RS`.
-pub(crate) const MAX_ENTRY_LEN: usize = 2 + 4 * (1 + MAX_DIGITS) + 1 + MAX_TEXT_LEN + 1;
+pub(crate) const MAX_ENTRY_LEN: usize = 3 + 4 * (1 + MAX_DIGITS) + 1 + MAX_TEXT_LEN + 1;
 
 /// Most digits of a number in a frame: `u64::MAX` has 20.
 pub(crate) const MAX_DIGITS: usize = 20;

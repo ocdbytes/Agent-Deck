@@ -39,9 +39,9 @@ EG_SIMULATOR_DUMP=deck.png cargo run -p deck --example preview --features sim
 
 ## Assets
 
-Fonts and logos live in `assets/`. Codex's pets are OpenAI's artwork, so
-they are not in git: the asset tool downloads their sprite sheets from
-OpenAI, where Codex gets them, into the ignored `assets/gen/pets.bin`. Run it
+Fonts and logos live in `assets/`. The pets shown for pi and Codex are
+OpenAI's artwork, so they are not in git: the asset tool downloads their
+sprite sheets into the ignored `assets/gen/pets.bin`. Run it
 once after cloning, and after changing a font, logo or the generated
 character set; it also rebuilds `src/assets.rs` and the project README's
 banner, `docs/banner.png`:
@@ -51,4 +51,4 @@ cargo run --manifest-path tools/assets/Cargo.toml
 ```
 
 Font licenses are stored beside the fonts in `assets/fonts/`. Logos, Claude
-Code's mascot and Codex's pets belong to their owners.
+Code's mascot and OpenAI's pets belong to their owners.

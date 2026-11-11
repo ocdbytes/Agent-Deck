@@ -1,7 +1,7 @@
 //! Builds frames on the Mac.
 
 use super::{
-    Entry,
+    Clock, Entry,
     constants::{BODY_START, MAX_DIGITS, MAX_FRAME_LEN, MAX_SESSIONS, MAX_TEXT_LEN, RS, US},
     crc16,
 };
@@ -15,13 +15,24 @@ pub struct Encoder<'b> {
 }
 
 impl<'b> Encoder<'b> {
-    /// Starts an empty frame in `buf`.
-    pub fn new(buf: &'b mut [u8; MAX_FRAME_LEN]) -> Self {
-        Self {
+    /// Starts an empty frame in `buf` with the host's local `clock`.
+    pub fn new(buf: &'b mut [u8; MAX_FRAME_LEN], clock: Clock) -> Self {
+        let mut encoder = Self {
             buf,
             len: BODY_START,
             sessions: 0,
+        };
+        let (hour, minute) = (clock.hour.min(23), clock.minute.min(59));
+        for byte in [
+            b'0' + hour / 10,
+            b'0' + hour % 10,
+            b'0' + minute / 10,
+            b'0' + minute % 10,
+            US,
+        ] {
+            encoder.put(byte);
         }
+        encoder
     }
 
     /// Adds a session. Sessions after the first [`MAX_SESSIONS`] are
@@ -33,6 +44,7 @@ impl<'b> Encoder<'b> {
         self.sessions += 1;
         self.put(entry.agent.code());
         self.put(entry.status.code());
+        self.put(entry.color.map_or(b'-', |color| color.code()));
         self.put(US);
         self.put_number(entry.uptime);
         self.put(US);

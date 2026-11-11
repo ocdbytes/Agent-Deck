@@ -74,6 +74,7 @@ fn session(root: &Path, cwd: &Path, started: SystemTime, models: &Value) -> Sess
         agent: Agent::Pi,
         name: transcript.name.unwrap_or_else(|| dir_name(cwd)),
         status: transcript.status,
+        color: None,
         started,
         context: transcript.context,
         subagents: 0,

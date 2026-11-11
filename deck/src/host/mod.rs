@@ -22,6 +22,7 @@ mod codex;
 mod pi;
 
 use std::{
+    cmp::Reverse,
     convert::Infallible,
     env,
     io::{self, Write},
@@ -31,10 +32,10 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use link_lib::{Agent, Context, Encoder, Entry, MAX_FRAME_LEN, Status};
+use link_lib::{Agent, Clock, Context, Encoder, Entry, MAX_FRAME_LEN, SessionColor, Status};
 
-/// Fetches every agent's sessions, oldest first, and encodes them into `buf`
-/// as one frame.
+/// Fetches every agent's sessions, busy first and newest first within each
+/// status, and encodes them into `buf` as one frame.
 ///
 /// # Errors
 ///
@@ -44,12 +45,13 @@ pub fn frame(buf: &mut [u8; MAX_FRAME_LEN]) -> io::Result<&[u8]> {
     for agent in AGENTS {
         sessions.extend(agent.sessions()?);
     }
-    sessions.sort_by_key(|session| session.started);
-    let mut encoder = Encoder::new(buf);
+    prioritise(&mut sessions);
+    let mut encoder = Encoder::new(buf, local_clock());
     for session in &sessions {
         encoder.push(&Entry {
             agent: session.agent,
             status: session.status,
+            color: session.color,
             name: &session.name,
             uptime: session.started.elapsed().unwrap_or_default().as_secs(),
             context: session.context,
@@ -99,9 +101,28 @@ struct Session {
     /// The session name, or its working directory's name if it has none.
     name: String,
     status: Status,
+    color: Option<SessionColor>,
     started: SystemTime,
     context: Option<Context>,
     subagents: usize,
+}
+
+/// Puts busy sessions first, then the newest session in each status group.
+fn prioritise(sessions: &mut [Session]) {
+    sessions.sort_by_key(|session| (session.status != Status::Busy, Reverse(session.started)));
+}
+
+/// Returns the Mac's local hour and minute.
+fn local_clock() -> Clock {
+    let output = stdout("date", &["+%H%M"]).unwrap_or_default();
+    let bytes = output.trim().as_bytes();
+    let [h1, h2, m1, m2] = bytes else {
+        return Clock::default();
+    };
+    Clock {
+        hour: (h1.saturating_sub(b'0')) * 10 + h2.saturating_sub(b'0'),
+        minute: (m1.saturating_sub(b'0')) * 10 + m2.saturating_sub(b'0'),
+    }
 }
 
 /// Returns `path` inside the home directory.
@@ -192,4 +213,38 @@ fn lsof(args: &[&str]) -> io::Result<Vec<(u32, PathBuf)>> {
         }
     }
     Ok(files)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn busy_sessions_win_then_newest_sessions() {
+        let session = |name: &str, status, seconds| Session {
+            agent: Agent::Pi,
+            name: name.to_owned(),
+            status,
+            color: None,
+            started: SystemTime::UNIX_EPOCH + Duration::from_secs(seconds),
+            context: None,
+            subagents: 0,
+        };
+        let mut sessions = vec![
+            session("old idle", Status::Idle, 1),
+            session("new idle", Status::Idle, 4),
+            session("old busy", Status::Busy, 2),
+            session("new busy", Status::Busy, 3),
+        ];
+
+        prioritise(&mut sessions);
+
+        assert_eq!(
+            sessions
+                .iter()
+                .map(|session| session.name.as_str())
+                .collect::<Vec<_>>(),
+            ["new busy", "old busy", "new idle", "old idle"]
+        );
+    }
 }

@@ -120,6 +120,31 @@ where
     target.draw_iter(pixels)
 }
 
+/// Draws `image` at twice its size with nearest-neighbor pixels.
+pub(crate) fn image_2x<D>(target: &mut D, image: Image, top_left: Point) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = Rgb565>,
+{
+    let pixels = image
+        .data
+        .chunks_exact(2)
+        .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
+        .zip(0..image.width * image.height)
+        .filter(|&(raw, _)| raw != 0)
+        .flat_map(|(raw, i)| {
+            let color = Rgb565::from(RawU16::new(raw));
+            let origin =
+                top_left + Point::new((i % image.width) as i32 * 2, (i / image.width) as i32 * 2);
+            [
+                Pixel(origin, color),
+                Pixel(origin + Point::new(1, 0), color),
+                Pixel(origin + Point::new(0, 1), color),
+                Pixel(origin + Point::new(1, 1), color),
+            ]
+        });
+    target.draw_iter(pixels)
+}
+
 /// Draws `text` in `font` and `color`, starting at `origin` on the baseline,
 /// and returns the x just after it.
 pub(crate) fn text<D>(

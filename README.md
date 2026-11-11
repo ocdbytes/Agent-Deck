@@ -5,14 +5,15 @@ Mac sends session data over USB to an ESP32, which draws it on a 2.8"
 240x320 ILI9341 SPI TFT LCD.
 
 The deck shows each session's agent, name, busy/idle status, uptime, context
-window usage and, for Claude Code, running subagents. Claude Code sessions
-use an animated Claude mascot instead of a logo; each Codex session shows a
-random pet from Codex's terminal UI.
+window usage and, for Claude Code, running subagents. Busy sessions appear
+first, then idle sessions, newest first within each group. Claude Code uses
+an animated mascot tinted with the session's `/color`; pi and Codex sessions
+show random OpenAI pets.
 
 ## Preview
 
 <p align="center">
-  <img src="docs/preview.jpg" alt="The deck on a desk, showing three Claude Code sessions and the summary tile" width="400">
+  <img src="docs/screen.png" alt="The deck on a desk, showing three Claude Code sessions and the summary tile" width="400">
 </p>
 
 ## How it works
@@ -39,14 +40,14 @@ keeps the last intact frame, so a lost or damaged one only delays an update.
 | [`deck`](deck/) | ESP32 and Mac | `Deck` display scene, `host` session sender (`agent-deck`) and desktop preview. |
 | [`firmware`](firmware/) | ESP32 | Reads USB frames and draws them with `Deck`; built separately outside the workspace. |
 
-Outside the workspace, `tools/assets` renders fonts, logos, Codex's pets and
+Outside the workspace, `tools/assets` renders fonts, logos, OpenAI's pets and
 the banner into bitmaps; see [`deck`](deck/#assets). `deck` uses
 [`frames`](https://github.com/ocdbytes/esp32-libs), which runs the same scene
 on the panel and desktop.
 
 ## Flash the deck
 
-Codex's pets are not in git, so after cloning, download them once (needs
+OpenAI's pets are not in git, so after cloning, download them once (needs
 network access; see [`deck`](deck/#assets)):
 
 ```sh
@@ -63,7 +64,9 @@ scripts/flash.sh /dev/cu.usbserial-0001   # or name it
 
 This builds and flashes the firmware with `espflash`, then starts
 `agent-deck`, which sends this Mac's sessions to the deck every second until
-Ctrl-C. Restart it later without flashing with:
+Ctrl-C. After pulling changes to the frame format, run `scripts/flash.sh`
+once so the host and firmware still match. Otherwise, restart it without
+flashing with:
 
 ```sh
 cargo run -p deck --features host --bin agent-deck [-- PORT]

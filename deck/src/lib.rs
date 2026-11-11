@@ -7,18 +7,18 @@
 //! window.
 //!
 //! The panel is a 2×2 grid: three session tiles per page and a summary tile.
-//! Busy sessions come first, then idle ones, each oldest first.
+//! Busy sessions come first, then idle ones, each newest first.
 //! A session tile shows the agent's logo, its running subagents, its status,
 //! its name, how much of its context window it fills and how long it has run.
-//! In place of a logo, Claude Code shows its animated mascot and Codex one of
-//! the pets from its terminal UI, picked at random per session.
+//! In place of a logo, Claude Code shows its animated mascot tinted with the
+//! session's color, while pi and Codex show OpenAI pets picked at random.
 //!
 //! Animations advance one tick per [`Scene::update`], [`FPS`] times a second.
 //! Firmware that redraws the whole panel only on changes calls [`Deck::tick`]
 //! itself and in between redraws only [`Deck::sprite_areas`], with
 //! [`Deck::draw_sprites`].
-//! The summary shows the page, how many sessions are busy and idle, and their
-//! total context tokens.
+//! The summary shows the Mac's local time, busy sessions and total context
+//! tokens.
 //!
 //! With the `host` feature, [`host`] is the Mac side: its main loop finds the
 //! sessions running on the Mac and sends them to the deck.
@@ -42,7 +42,7 @@ use core::fmt;
 use embedded_graphics::{pixelcolor::Rgb565, prelude::*, primitives::Rectangle};
 use frames::Scene;
 use heapless::{String, Vec};
-use link_lib::{Agent, Context, Decoder, MAX_SESSIONS, MAX_TEXT_LEN, Status};
+use link_lib::{Agent, Clock, Context, Decoder, MAX_SESSIONS, MAX_TEXT_LEN, SessionColor, Status};
 
 use crate::ui::PER_PAGE;
 
@@ -58,6 +58,7 @@ pub const FPS: u32 = 30;
 struct Row {
     agent: Agent,
     status: Status,
+    color: Option<SessionColor>,
     name: String<MAX_TEXT_LEN>,
     uptime: u64,
     context: Option<Context>,
@@ -72,6 +73,7 @@ pub struct Deck<R> {
     read: R,
     decoder: Decoder,
     rows: Vec<Row, MAX_SESSIONS>,
+    clock: Clock,
     page: usize,
     /// Picks each session's random animation; see [`ui::session_hash`].
     seed: u32,
@@ -134,6 +136,7 @@ impl<R: FnMut() -> Option<u8>> Deck<R> {
             read,
             decoder: Decoder::new(),
             rows: Vec::new(),
+            clock: Clock::default(),
             page: 0,
             seed,
             tick: 0,
@@ -151,6 +154,7 @@ impl<R: FnMut() -> Option<u8>> Deck<R> {
         while let Some(byte) = (self.read)() {
             if let Some(frame) = self.decoder.push(byte) {
                 received = true;
+                self.clock = frame.clock();
                 self.rows = frame
                     .entries()
                     .take(MAX_SESSIONS)
@@ -164,6 +168,7 @@ impl<R: FnMut() -> Option<u8>> Deck<R> {
                         Some(Row {
                             agent: entry.agent,
                             status: entry.status,
+                            color: entry.color,
                             name: entry.name.try_into().ok()?,
                             uptime: entry.uptime,
                             context: entry.context,
@@ -202,7 +207,7 @@ impl<R: FnMut() -> Option<u8>> Scene for Deck<R> {
     where
         D: DrawTarget<Color = Rgb565>,
     {
-        ui::draw_page(target, &self.rows, self.page, self.pages(), self.tick)
+        ui::draw_page(target, &self.rows, self.clock, self.page, self.tick)
     }
 }
 
@@ -210,6 +215,7 @@ impl<R> fmt::Debug for Deck<R> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Deck")
             .field("rows", &self.rows)
+            .field("clock", &self.clock)
             .field("page", &self.page)
             .finish_non_exhaustive()
     }
@@ -226,7 +232,7 @@ mod tests {
         prelude::*,
     };
     use frames::Scene;
-    use link_lib::{Agent, Context, Encoder, Entry, MAX_FRAME_LEN, Status};
+    use link_lib::{Agent, Clock, Context, Encoder, Entry, MAX_FRAME_LEN, SessionColor, Status};
 
     use super::{Deck, FPS, SIZE, ui::session_hash};
 
@@ -255,6 +261,7 @@ mod tests {
         let entry = |agent, status, subagents| Entry {
             agent,
             status,
+            color: (agent == Agent::Claude).then_some(SessionColor::Purple),
             name: "agent-deck",
             uptime: 4_000,
             context,
@@ -262,7 +269,7 @@ mod tests {
         };
         let mut deck = received(&[
             entry(Agent::Claude, Status::Busy, 5),
-            entry(Agent::Codex, Status::Busy, 0),
+            entry(Agent::Pi, Status::Busy, 0),
             entry(Agent::Codex, Status::Idle, 0),
         ]);
 
@@ -285,6 +292,7 @@ mod tests {
         let entry = |name, status| Entry {
             agent: Agent::Claude,
             status,
+            color: None,
             name,
             uptime: 60,
             context: None,
@@ -305,7 +313,13 @@ mod tests {
     /// frame.
     fn received(entries: &[Entry<'_>]) -> Deck<impl FnMut() -> Option<u8> + use<>> {
         let mut buf = [0; MAX_FRAME_LEN];
-        let mut encoder = Encoder::new(&mut buf);
+        let mut encoder = Encoder::new(
+            &mut buf,
+            Clock {
+                hour: 18,
+                minute: 25,
+            },
+        );
         entries.iter().for_each(|entry| encoder.push(entry));
         let len = encoder.finish().len();
         let mut bytes = buf.into_iter().take(len);

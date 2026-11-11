@@ -4,7 +4,7 @@
 use core::{mem, str};
 
 use super::{
-    Agent, Context, Entry, Status,
+    Agent, Clock, Context, Entry, SessionColor, Status,
     constants::{BODY_START, MAX_FRAME_LEN, MAX_SESSIONS, MAX_TEXT_LEN, RS, US},
     crc16,
 };
@@ -16,8 +16,12 @@ impl<'a> Entry<'a> {
     /// the name breaks the format.
     fn parse(entry: &'a str) -> Option<Self> {
         let mut fields = entry.splitn(6, char::from(US));
-        let [agent, status] = *fields.next()?.as_bytes() else {
+        let [agent, status, color] = *fields.next()?.as_bytes() else {
             return None;
+        };
+        let color = match color {
+            b'-' => None,
+            code => Some(SessionColor::from_code(code)?),
         };
         let uptime = fields.next()?.parse().ok()?;
         let context = match (fields.next()?, fields.next()?) {
@@ -38,6 +42,7 @@ impl<'a> Entry<'a> {
         Some(Self {
             agent: Agent::from_code(agent)?,
             status: Status::from_code(status)?,
+            color,
             name,
             uptime,
             context,
@@ -49,10 +54,16 @@ impl<'a> Entry<'a> {
 /// A frame that arrived intact.
 #[derive(Debug, Clone, Copy)]
 pub struct Frame<'a> {
+    clock: Clock,
     body: &'a str,
 }
 
 impl<'a> Frame<'a> {
+    /// Returns the host's local time when it built this frame.
+    pub const fn clock(self) -> Clock {
+        self.clock
+    }
+
     /// Returns the sessions in this frame, in the order they were sent.
     pub fn entries(self) -> impl Iterator<Item = Entry<'a>> {
         // `parse` checked every entry, so none is skipped here.
@@ -75,10 +86,24 @@ impl<'a> Frame<'a> {
             return None;
         }
         let body = str::from_utf8(body).ok()?;
+        let (clock, body) = body.split_once(char::from(US))?;
+        let [h1, h2, m1, m2] = *clock.as_bytes() else {
+            return None;
+        };
+        if !clock.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+        let clock = Clock {
+            hour: (h1 - b'0') * 10 + h2 - b'0',
+            minute: (m1 - b'0') * 10 + m2 - b'0',
+        };
+        if clock.hour > 23 || clock.minute > 59 {
+            return None;
+        }
         let mut entries = body.split_terminator(char::from(RS));
         let valid = entries.clone().count() <= MAX_SESSIONS
             && entries.all(|entry| Entry::parse(entry).is_some());
-        valid.then_some(Self { body })
+        valid.then_some(Self { clock, body })
     }
 }
 

@@ -15,10 +15,12 @@
 //! ```text
 //! frame     = crc " " body "\n"
 //! crc       = 4 lowercase hex digits: CRC-16/IBM-3740 of body
-//! body      = *(entry RS)
-//! entry     = agent status US uptime US used US window US subagents US name
+//! body      = clock US *(entry RS)
+//! clock     = 4 decimal digits: local time as HHMM
+//! entry     = agent status color US uptime US used US window US subagents US name
 //! agent     = "c" (Claude Code) / "p" (pi) / "x" (Codex)
 //! status    = "b" (busy) / "i" (idle)
+//! color     = "r" / "o" / "y" / "g" / "c" / "b" / "p" / "k" / "-" (none)
 //! uptime    = decimal seconds the session has run
 //! used      = decimal context tokens in use; empty when unknown
 //! window    = decimal context window in tokens; empty when unknown
@@ -80,6 +82,59 @@ impl Agent {
     }
 }
 
+/// The color assigned to a session by its coding agent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum SessionColor {
+    /// Red.
+    Red,
+    /// Orange.
+    Orange,
+    /// Yellow.
+    Yellow,
+    /// Green.
+    Green,
+    /// Cyan.
+    Cyan,
+    /// Blue.
+    Blue,
+    /// Purple.
+    Purple,
+    /// Pink.
+    Pink,
+}
+
+impl SessionColor {
+    /// Returns the byte that stands for this color in a frame.
+    const fn code(self) -> u8 {
+        match self {
+            Self::Red => b'r',
+            Self::Orange => b'o',
+            Self::Yellow => b'y',
+            Self::Green => b'g',
+            Self::Cyan => b'c',
+            Self::Blue => b'b',
+            Self::Purple => b'p',
+            Self::Pink => b'k',
+        }
+    }
+
+    /// Returns the color a frame byte stands for.
+    const fn from_code(code: u8) -> Option<Self> {
+        match code {
+            b'r' => Some(Self::Red),
+            b'o' => Some(Self::Orange),
+            b'y' => Some(Self::Yellow),
+            b'g' => Some(Self::Green),
+            b'c' => Some(Self::Cyan),
+            b'b' => Some(Self::Blue),
+            b'p' => Some(Self::Purple),
+            b'k' => Some(Self::Pink),
+            _ => None,
+        }
+    }
+}
+
 /// What a session is doing.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -118,6 +173,15 @@ impl Status {
     }
 }
 
+/// The host's local time when it built a frame.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Clock {
+    /// Hour from 0 to 23.
+    pub hour: u8,
+    /// Minute from 0 to 59.
+    pub minute: u8,
+}
+
 /// How much of its model's context window a session fills.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Context {
@@ -135,6 +199,8 @@ pub struct Entry<'a> {
     pub agent: Agent,
     /// What the session is doing.
     pub status: Status,
+    /// The color assigned to the session, or `None` if its agent has none.
+    pub color: Option<SessionColor>,
     /// The session name. [`Encoder::push`] cuts it to [`MAX_TEXT_LEN`] bytes
     /// at a character boundary and turns control characters into spaces.
     pub name: &'a str,
@@ -170,6 +236,7 @@ mod tests {
             Entry {
                 agent: Agent::Claude,
                 status: Status::Busy,
+                color: Some(SessionColor::Purple),
                 name: "agent-deck",
                 uptime: 3_600,
                 context: Some(Context {
@@ -181,6 +248,7 @@ mod tests {
             Entry {
                 agent: Agent::Pi,
                 status: Status::Idle,
+                color: None,
                 name: "notes",
                 uptime: 0,
                 context: None,
@@ -188,13 +256,65 @@ mod tests {
             },
         ];
         let mut buf = [0; MAX_FRAME_LEN];
-        let mut encoder = Encoder::new(&mut buf);
+        let mut encoder = Encoder::new(
+            &mut buf,
+            Clock {
+                hour: 18,
+                minute: 25,
+            },
+        );
         sent.iter().for_each(|entry| encoder.push(entry));
         let (end, line) = encoder.finish().split_last().unwrap();
 
         let mut decoder = Decoder::new();
         assert!(line.iter().all(|&byte| decoder.push(byte).is_none()));
         let frame = decoder.push(*end).expect("an intact frame");
+        assert_eq!(
+            frame.clock(),
+            Clock {
+                hour: 18,
+                minute: 25
+            }
+        );
         assert!(frame.entries().eq(sent));
+    }
+
+    #[test]
+    fn maximum_frame_fits_the_fixed_buffer() {
+        let entry = Entry {
+            agent: Agent::Claude,
+            status: Status::Busy,
+            color: Some(SessionColor::Purple),
+            name: "12345678901234567890123456789012",
+            uptime: u64::MAX,
+            context: Some(Context {
+                used: u64::MAX,
+                window: Some(u64::MAX),
+            }),
+            subagents: usize::MAX,
+        };
+        let mut buf = [0; MAX_FRAME_LEN];
+        let mut encoder = Encoder::new(
+            &mut buf,
+            Clock {
+                hour: 23,
+                minute: 59,
+            },
+        );
+        for _ in 0..MAX_SESSIONS {
+            encoder.push(&entry);
+        }
+        let (end, line) = encoder.finish().split_last().unwrap();
+
+        let mut decoder = Decoder::new();
+        assert!(line.iter().all(|&byte| decoder.push(byte).is_none()));
+        assert_eq!(
+            decoder
+                .push(*end)
+                .expect("maximum frame must decode")
+                .entries()
+                .count(),
+            MAX_SESSIONS
+        );
     }
 }

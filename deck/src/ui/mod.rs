@@ -6,14 +6,14 @@ use core::fmt::Write as _;
 use embedded_graphics::{
     pixelcolor::Rgb565,
     prelude::*,
-    primitives::{Circle, Line, PrimitiveStyle, Rectangle},
+    primitives::{Line, PrimitiveStyle, Rectangle},
 };
 use heapless::String;
-use link_lib::{Agent, Context, Status};
+use link_lib::{Agent, Clock, Context, Status};
 
 use crate::{
-    Row, SIZE,
-    assets::{BODY, CLAUDE_SMALL, KANJI, NUMERAL, OPENAI_SMALL, PERCENT, PI, PI_SMALL},
+    Row,
+    assets::{BODY, CLAUDE_SMALL, KANJI, NUMERAL, OPENAI_SMALL, PERCENT, PI_SMALL},
     draw::{self, Image},
 };
 
@@ -59,8 +59,17 @@ const GREEN: Rgb565 = rgb(0xB5F59A);
 /// Kanji accents and context warnings.
 const VERMILION: Rgb565 = rgb(0xFF7A52);
 
-/// Lines between tiles.
-const RULE: Rgb565 = rgb(0x4A4A4A);
+/// Panel outlines and agent IDs.
+const CYAN: Rgb565 = rgb(0x35E6F2);
+
+/// Faint panel borders and scanlines.
+const GRID: Rgb565 = rgb(0x12343A);
+
+/// The summary panel.
+const PINK: Rgb565 = rgb(0xFF2D7D);
+
+/// Dark scanlines over the summary panel.
+const PINK_GRID: Rgb565 = rgb(0xD51F67);
 
 /// The empty part of a context bar.
 const TRACK: Rgb565 = rgb(0x5A5A5A);
@@ -74,25 +83,20 @@ type Label = String<40>;
 pub(crate) fn draw_page<D>(
     target: &mut D,
     rows: &[Row],
+    clock: Clock,
     page: usize,
-    pages: usize,
     tick: u32,
 ) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = Rgb565>,
 {
-    let rule = PrimitiveStyle::with_stroke(RULE, 1);
-    let (width, height) = (SIZE.width as i32, SIZE.height as i32);
-    Line::new(Point::new(TILE_W, 0), Point::new(TILE_W, height - 1))
-        .into_styled(rule)
-        .draw(target)?;
-    Line::new(Point::new(0, TILE_H), Point::new(width - 1, TILE_H))
-        .into_styled(rule)
-        .draw(target)?;
-    for (slot, row) in visible(rows, page) {
-        draw_session(target, row, tile(slot), tick)?;
+    for slot in 0..PER_PAGE {
+        draw_panel(target, tile(slot))?;
     }
-    draw_summary(target, rows, page, pages, tile(PER_PAGE))
+    for (slot, row) in visible(rows, page) {
+        draw_session(target, row, page * PER_PAGE + slot + 1, tile(slot), tick)?;
+    }
+    draw_summary(target, rows, clock, page, tile(PER_PAGE))
 }
 
 /// Redraws only the animations on page `page` of `rows`, `tick` ticks in:
@@ -109,6 +113,7 @@ where
     for (slot, row) in visible(rows, page).filter(|(_, row)| is_animated(row.agent)) {
         let area = sprite_area(slot);
         target.fill_solid(&area, Rgb565::BLACK)?;
+        draw_scanlines(target, area, GRID)?;
         draw_logo(target, row, tick, area.top_left)?;
     }
     Ok(())
@@ -130,7 +135,7 @@ fn visible(rows: &[Row], page: usize) -> impl Iterator<Item = (usize, &Row)> {
 
 /// Returns whether `agent`'s sessions show an animation instead of a logo.
 fn is_animated(agent: Agent) -> bool {
-    matches!(agent, Agent::Claude | Agent::Codex)
+    matches!(agent, Agent::Claude | Agent::Pi | Agent::Codex)
 }
 
 /// Returns the area of the logo or animation in tile `slot`.
@@ -144,15 +149,77 @@ fn tile(slot: usize) -> Point {
     Point::new((slot % 2) as i32 * TILE_W, (slot / 2) as i32 * TILE_H)
 }
 
+/// Draws a dark scanlined panel with bright corner marks.
+fn draw_panel<D>(target: &mut D, at: Point) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = Rgb565>,
+{
+    let area = Rectangle::new(at + Point::new(4, 4), Size::new(112, 152));
+    draw_scanlines(target, area, GRID)?;
+    area.into_styled(PrimitiveStyle::with_stroke(GRID, 1))
+        .draw(target)?;
+    let (left, right, top, bottom) = (
+        area.top_left.x,
+        area.top_left.x + area.size.width as i32 - 1,
+        area.top_left.y,
+        area.top_left.y + area.size.height as i32 - 1,
+    );
+    let corner = PrimitiveStyle::with_stroke(CYAN, 1);
+    for (a, b) in [
+        (Point::new(left, top), Point::new(left + 7, top)),
+        (Point::new(left, top), Point::new(left, top + 7)),
+        (Point::new(right - 7, top), Point::new(right, top)),
+        (Point::new(right, top), Point::new(right, top + 7)),
+        (Point::new(left, bottom - 7), Point::new(left, bottom)),
+        (Point::new(left, bottom), Point::new(left + 7, bottom)),
+        (Point::new(right, bottom - 7), Point::new(right, bottom)),
+        (Point::new(right - 7, bottom), Point::new(right, bottom)),
+    ] {
+        Line::new(a, b).into_styled(corner).draw(target)?;
+    }
+    Ok(())
+}
+
+/// Draws horizontal scanlines inside `area`.
+fn draw_scanlines<D>(target: &mut D, area: Rectangle, color: Rgb565) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = Rgb565>,
+{
+    let right = area.top_left.x + area.size.width as i32 - 1;
+    let bottom = area.top_left.y + area.size.height as i32;
+    let start = area.top_left.y + (1 - area.top_left.y).rem_euclid(3);
+    for y in (start..bottom).step_by(3) {
+        Line::new(Point::new(area.top_left.x, y), Point::new(right, y))
+            .into_styled(PrimitiveStyle::with_stroke(color, 1))
+            .draw(target)?;
+    }
+    Ok(())
+}
+
 /// Draws one session's tile with its top-left corner at `at`, with its
 /// animation `tick` ticks in.
-fn draw_session<D>(target: &mut D, row: &Row, at: Point, tick: u32) -> Result<(), D::Error>
+fn draw_session<D>(
+    target: &mut D,
+    row: &Row,
+    number: usize,
+    at: Point,
+    tick: u32,
+) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = Rgb565>,
 {
     let (left, right) = (at.x + PAD, at.x + TILE_W - PAD);
 
     draw_logo(target, row, tick, Point::new(left, at.y + PAD))?;
+    let mut id = Label::new();
+    let _ = write!(id, "A{number:02}");
+    draw::text(
+        target,
+        &BODY,
+        &id,
+        Point::new(right - BODY.text_width(&id), at.y + 14),
+        CYAN,
+    )?;
     let small = match row.agent {
         Agent::Claude => Some(CLAUDE_SMALL),
         Agent::Pi => Some(PI_SMALL),
@@ -160,10 +227,10 @@ where
         _ => None,
     };
     if let Some(small) = small {
-        draw_subagents(target, small, row.subagents, right, at.y + PAD)?;
+        draw_subagents(target, small, row.subagents, right, at.y + 24)?;
     }
 
-    // ● 稼働 busy, or ○ 待機 idle.
+    // ■ 稼働 busy, or □ 待機 idle.
     let busy = row.status == Status::Busy;
     let (color, kanji) = if busy {
         (GREEN, "稼働")
@@ -172,13 +239,13 @@ where
     };
     // The kanji's 15 px stand just below the animation.
     let y = at.y + 56;
-    let dot = Circle::new(Point::new(left, y - 6), 6);
-    let dot_style = if busy {
+    let marker = Rectangle::new(Point::new(left, y - 6), Size::new(6, 6));
+    let marker_style = if busy {
         PrimitiveStyle::with_fill(color)
     } else {
         PrimitiveStyle::with_stroke(color, 1)
     };
-    dot.into_styled(dot_style).draw(target)?;
+    marker.into_styled(marker_style).draw(target)?;
     let x = draw::text(
         target,
         &KANJI,
@@ -212,10 +279,10 @@ where
         Some(percent) => write!(digits, "{percent}"),
         None => digits.write_str("--"),
     };
-    let y = at.y + 112;
+    let y = at.y + 120;
     let x = draw::text(target, &NUMERAL, &digits, Point::new(left, y), color)?;
     draw::text(target, &PERCENT, "%", Point::new(x, y), color)?;
-    let bar = at.y + 119;
+    let bar = at.y + 127;
     Line::new(Point::new(left, bar), Point::new(right - 1, bar))
         .into_styled(PrimitiveStyle::with_stroke(TRACK, 1))
         .draw(target)?;
@@ -228,7 +295,7 @@ where
         target,
         "ctx",
         &context_text(row.context),
-        at.y + 136,
+        at.y + 145,
         left,
         right,
     )?;
@@ -236,23 +303,22 @@ where
         target,
         "up",
         &uptime_text(row.uptime),
-        at.y + 152,
+        at.y + 153,
         left,
         right,
     )
 }
 
 /// Draws the logo of `row`'s agent with its top-left corner at `top_left`:
-/// for Claude Code its mascot and for Codex its pet, `tick` ticks into their
-/// animation.
+/// for Claude Code its mascot and for pi and Codex an OpenAI pet, `tick`
+/// ticks into their animation.
 fn draw_logo<D>(target: &mut D, row: &Row, tick: u32, top_left: Point) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = Rgb565>,
 {
     match row.agent {
-        Agent::Claude => sprites::draw_claude(target, row.hash, tick, top_left),
-        Agent::Codex => sprites::draw_pet(target, row.hash, row.status, tick, top_left),
-        Agent::Pi => draw::image(target, PI, top_left),
+        Agent::Claude => sprites::draw_claude(target, row.hash, row.color, tick, top_left),
+        Agent::Pi | Agent::Codex => sprites::draw_pet(target, row.hash, row.status, tick, top_left),
         _ => Ok(()),
     }
 }
@@ -297,117 +363,125 @@ where
     Ok(())
 }
 
-/// Draws the summary tile with its top-left corner at `at`: 今 now and the
-/// page, how many sessions are busy and idle, and their total context tokens.
+/// Draws the summary tile with its top-left corner at `at`: the local time,
+/// busy sessions and total context tokens.
 fn draw_summary<D>(
     target: &mut D,
     rows: &[Row],
+    clock: Clock,
     page: usize,
-    pages: usize,
     at: Point,
 ) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = Rgb565>,
 {
+    let panel = Rectangle::new(at + Point::new(4, 4), Size::new(112, 152));
+    draw_scanlines(target, panel, GRID)?;
+    panel
+        .into_styled(PrimitiveStyle::with_stroke(PINK, 1))
+        .draw(target)?;
     let (left, right) = (at.x + PAD, at.x + TILE_W - PAD);
 
-    let y = at.y + 22;
+    let header = Rectangle::new(at + Point::new(4, 4), Size::new(112, 20));
+    header
+        .into_styled(PrimitiveStyle::with_fill(PINK))
+        .draw(target)?;
+    draw_scanlines(target, header, PINK_GRID)?;
+    let y = at.y + 18;
     let x = draw::text(
         target,
         &KANJI,
         "今",
         Point::new(left, y + KANJI_DROP),
-        VERMILION,
+        Rgb565::BLACK,
     )?;
-    draw::text(target, &BODY, "now", Point::new(x + 4, y), DIM)?;
-    let mut page_text = Label::new();
-    // invariant: two usize values and a slash fit a Label.
-    let _ = write!(page_text, "{}/{pages}", page + 1);
-    let x = right - BODY.text_width(&page_text);
-    draw::text(target, &BODY, &page_text, Point::new(x, y), DIM)?;
+    draw::text(target, &BODY, "NOW", Point::new(x + 4, y), Rgb565::BLACK)?;
+    let mut time = Label::new();
+    let _ = write!(time, "{:02}:{:02}", clock.hour, clock.minute);
+    draw::text(
+        target,
+        &BODY,
+        &time,
+        Point::new(right - BODY.text_width(&time), y),
+        Rgb565::BLACK,
+    )?;
 
     let busy = rows.iter().filter(|row| row.status == Status::Busy).count();
-    draw_count(target, busy, "busy", GREEN, Point::new(left, at.y + 74))?;
-    draw_count(
+    let mut count = Label::new();
+    let _ = write!(count, "{busy}");
+    let x = draw::text(target, &NUMERAL, &count, Point::new(left, at.y + 57), GREEN)?;
+    let mut total = Label::new();
+    let _ = write!(total, "/{}", rows.len());
+    draw::text(target, &BODY, &total, Point::new(x, at.y + 51), DIM)?;
+    draw::text(
         target,
-        rows.len() - busy,
-        "idle",
-        TEXT,
-        Point::new(left, at.y + 112),
+        &BODY,
+        "BUSY",
+        Point::new(right - BODY.text_width("BUSY"), at.y + 51),
+        GREEN,
     )?;
 
-    Line::new(
-        Point::new(left, at.y + 138),
-        Point::new(right - 1, at.y + 138),
-    )
-    .into_styled(PrimitiveStyle::with_stroke(RULE, 1))
-    .draw(target)?;
-    let total = rows
+    for (slot, row) in visible(rows, page) {
+        let top_left = Point::new(left + slot as i32 * 32, at.y + 63);
+        let card = Rectangle::new(top_left, Size::new(26, 28));
+        let color = if row.status == Status::Busy {
+            GREEN
+        } else {
+            TRACK
+        };
+        card.into_styled(PrimitiveStyle::with_stroke(color, 1))
+            .draw(target)?;
+        let logo = match row.agent {
+            Agent::Claude => CLAUDE_SMALL,
+            Agent::Pi => PI_SMALL,
+            Agent::Codex => OPENAI_SMALL,
+            _ => continue,
+        };
+        draw::image_2x(target, logo, top_left + Point::new(5, 6))?;
+    }
+
+    let divider = at.y + 109;
+    for x in (left..right).step_by(4) {
+        Line::new(
+            Point::new(x, divider),
+            Point::new((x + 1).min(right - 1), divider),
+        )
+        .into_styled(PrimitiveStyle::with_stroke(TRACK, 1))
+        .draw(target)?;
+    }
+    draw::text(target, &BODY, "TOK", Point::new(left, at.y + 126), CYAN)?;
+
+    let tokens: u64 = rows
         .iter()
         .filter_map(|row| row.context)
         .map(|context| context.used)
         .sum();
-    draw_row(target, "tok", &tokens_text(total), at.y + 152, left, right)
-}
-
-/// Draws a big `count` in `color` and a dim `label` after it, on the
-/// baseline at `origin`.
-fn draw_count<D>(
-    target: &mut D,
-    count: usize,
-    label: &str,
-    color: Rgb565,
-    origin: Point,
-) -> Result<(), D::Error>
-where
-    D: DrawTarget<Color = Rgb565>,
-{
-    let mut digits = Label::new();
-    // invariant: a usize has at most 20 digits, which fit a Label.
-    let _ = write!(digits, "{count}");
-    let x = draw::text(target, &NUMERAL, &digits, origin, color)?;
-    draw::text(target, &BODY, label, Point::new(x + 4, origin.y), DIM)?;
+    let (digits, suffix) = summary_tokens(tokens);
+    let origin = Point::new(left, at.y + 153);
+    draw::text(target, &NUMERAL, &digits, origin + Point::new(1, 0), PINK)?;
+    let x = draw::text(target, &NUMERAL, &digits, origin, TEXT)?;
+    draw::text(target, &BODY, &suffix, Point::new(x, origin.y), CYAN)?;
     Ok(())
 }
 
-/// Draws `name` in corner brackets, 「name」, on the baseline at `origin`,
-/// cut short with `…` so it ends before `right`.
+/// Draws `name` after a command-prompt marker, cut short with `…` so it
+/// ends before `right`.
 fn draw_name<D>(target: &mut D, name: &str, origin: Point, right: i32) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = Rgb565>,
 {
-    let style = PrimitiveStyle::with_stroke(DIM, 1);
-    let top = origin.y - BODY.baseline as i32;
-    let bottom = top + BODY.height as i32 - 1;
-    // 「 is a corner at the top left.
-    Line::new(Point::new(origin.x, top), Point::new(origin.x + 3, top))
-        .into_styled(style)
-        .draw(target)?;
-    Line::new(Point::new(origin.x, top), Point::new(origin.x, top + 6))
-        .into_styled(style)
-        .draw(target)?;
-
-    let start = Point::new(origin.x + 5, origin.y);
-    let fits = ((right - start.x - 5) / BODY.width as i32) as usize;
-    let end = if name.chars().count() > fits {
+    let x = draw::text(target, &BODY, ">_", origin, DIM)?;
+    let fits = ((right - x) / BODY.width as i32) as usize;
+    if name.chars().count() > fits {
         let cut = name
             .char_indices()
             .nth(fits.saturating_sub(1))
             .map_or(name.len(), |(i, _)| i);
-        let x = draw::text(target, &BODY, &name[..cut], start, TEXT)?;
-        draw::text(target, &BODY, "…", Point::new(x, origin.y), TEXT)?
+        let x = draw::text(target, &BODY, &name[..cut], Point::new(x, origin.y), DIM)?;
+        draw::text(target, &BODY, "…", Point::new(x, origin.y), DIM)?;
     } else {
-        draw::text(target, &BODY, name, start, TEXT)?
-    };
-
-    // 」 is a corner at the bottom right, just after the name.
-    let x = end + 2;
-    Line::new(Point::new(x, bottom - 6), Point::new(x, bottom))
-        .into_styled(style)
-        .draw(target)?;
-    Line::new(Point::new(x - 3, bottom), Point::new(x, bottom))
-        .into_styled(style)
-        .draw(target)?;
+        draw::text(target, &BODY, name, Point::new(x, origin.y), DIM)?;
+    }
     Ok(())
 }
 
@@ -443,6 +517,30 @@ fn context_text(context: Option<Context>) -> Label {
         let _ = write!(text, "/{}", tokens_text(window));
     }
     text
+}
+
+/// Splits the summary token count into large digits and a small suffix.
+fn summary_tokens(tokens: u64) -> (Label, Label) {
+    let (mut digits, mut suffix) = (Label::new(), Label::new());
+    match tokens {
+        0..1_000 => {
+            let _ = write!(digits, "{tokens}");
+        }
+        1_000..1_000_000 => {
+            let _ = write!(digits, "{}", tokens / 1_000);
+            let _ = suffix.write_str("k");
+        }
+        _ => {
+            let tenths = tokens / 100_000;
+            let _ = write!(digits, "{}", tenths / 10);
+            let _ = if tenths % 10 == 0 {
+                suffix.write_str("M")
+            } else {
+                write!(suffix, ".{}M", tenths % 10)
+            };
+        }
+    }
+    (digits, suffix)
 }
 
 /// Returns a token count as `850`, `142k` or `1.2M`.
@@ -484,4 +582,20 @@ const fn rgb(hex: u32) -> Rgb565 {
         (hex >> 10) as u8 & 0x3F,
         (hex >> 3) as u8 & 0x1F,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::summary_tokens;
+
+    #[test]
+    fn summary_tokens_uses_the_right_unit() {
+        let text = |tokens| {
+            let (digits, suffix) = summary_tokens(tokens);
+            (digits.as_str().to_owned(), suffix.as_str().to_owned())
+        };
+        assert_eq!(text(850), ("850".to_owned(), "".to_owned()));
+        assert_eq!(text(366_000), ("366".to_owned(), "k".to_owned()));
+        assert_eq!(text(2_890_000), ("2".to_owned(), ".8M".to_owned()));
+    }
 }

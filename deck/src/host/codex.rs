@@ -91,6 +91,7 @@ fn session(pid: u32, lock: &Path, rollouts: &Path, names: &HashMap<String, Strin
         agent: Agent::Codex,
         name,
         status: rollout.status,
+        color: None,
         started: created(lock),
         context: rollout.context,
         subagents: 0,

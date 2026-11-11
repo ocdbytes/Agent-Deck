@@ -22,7 +22,9 @@ use std::{
 
 use serde_json::Value;
 
-use super::{Agent, Context, Session, Sessions, Status, dir_name, home_path, processes};
+use super::{
+    Agent, Context, Session, SessionColor, Sessions, Status, dir_name, home_path, processes,
+};
 
 /// Context window of Claude models by model ID prefix, from Anthropic's model
 /// table of October 2026. Other models get [`DEFAULT_WINDOW`].
@@ -120,12 +122,38 @@ fn session(json: &str, running: &HashSet<u32>, projects: &Path) -> Option<Sessio
         agent: Agent::Claude,
         name,
         status,
+        color: session_color(&tail),
         started,
         context: context(&tail),
         subagents: transcript
             .as_deref()
             .map_or(0, |path| subagents(path, &tail)),
     })
+}
+
+/// Returns the last Claude Code color recorded in a session transcript.
+fn session_color(tail: &str) -> Option<SessionColor> {
+    for entry in tail
+        .lines()
+        .rev()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+    {
+        let Some(color) = entry["agentColor"].as_str() else {
+            continue;
+        };
+        return match color {
+            "red" => Some(SessionColor::Red),
+            "orange" => Some(SessionColor::Orange),
+            "yellow" => Some(SessionColor::Yellow),
+            "green" => Some(SessionColor::Green),
+            "cyan" => Some(SessionColor::Cyan),
+            "blue" => Some(SessionColor::Blue),
+            "purple" => Some(SessionColor::Purple),
+            "pink" => Some(SessionColor::Pink),
+            _ => None,
+        };
+    }
+    None
 }
 
 /// Returns the transcript of session `id`, from whichever project directory
@@ -237,4 +265,23 @@ fn read_tail(path: &Path, len: u64) -> io::Result<String> {
         Some((_, rest)) if start > 0 => rest.to_owned(),
         _ => text.into_owned(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn latest_supported_session_color_wins() {
+        let tail = r#"{"agentColor":"blue"}
+{"agentColor":"pink"}"#;
+        assert_eq!(session_color(tail), Some(SessionColor::Pink));
+        assert_eq!(
+            session_color(
+                r#"{"agentColor":"blue"}
+{"agentColor":"unknown"}"#
+            ),
+            None
+        );
+    }
 }

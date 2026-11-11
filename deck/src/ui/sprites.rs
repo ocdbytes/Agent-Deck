@@ -1,8 +1,8 @@
 //! The animations drawn in place of a session's logo: Claude Code's mascot,
-//! and for Codex one of the pets from its terminal UI.
+//! and for pi and Codex one of OpenAI's pets.
 
 use embedded_graphics::{pixelcolor::Rgb565, prelude::*, primitives::Rectangle};
-use link_lib::Status;
+use link_lib::{SessionColor, Status};
 
 use super::rgb;
 use crate::{FPS, assets::PETS, draw};
@@ -95,6 +95,7 @@ pub(super) const SIZE: Size = Size::new(
 pub(super) fn draw_claude<D>(
     target: &mut D,
     hash: u32,
+    color: Option<SessionColor>,
     tick: u32,
     top_left: Point,
 ) -> Result<(), D::Error>
@@ -102,6 +103,17 @@ where
     D: DrawTarget<Color = Rgb565>,
 {
     let pose = claude_pose(hash, tick);
+    let color = color.map_or(CLAUDE_ORANGE, |color| match color {
+        SessionColor::Red => rgb(0xFF6B6B),
+        SessionColor::Orange => rgb(0xFF9F43),
+        SessionColor::Yellow => rgb(0xFFE66D),
+        SessionColor::Green => rgb(0x6BCB77),
+        SessionColor::Cyan => rgb(0x4DD0E1),
+        SessionColor::Blue => rgb(0x5B8DEF),
+        SessionColor::Purple => rgb(0xB084F5),
+        SessionColor::Pink => rgb(0xFF7EB6),
+        _ => CLAUDE_ORANGE,
+    });
     let origin = top_left + (SIZE - MASCOT) / 2;
     for (row, line) in (0..).zip(pose) {
         for (column, c) in (0..).zip(line.chars()) {
@@ -111,14 +123,14 @@ where
                     ((column * 2 + quadrant % 2) * QUADRANT.width) as i32,
                     ((row * 2 + quadrant / 2) * QUADRANT.height) as i32,
                 );
-                target.fill_solid(&Rectangle::new(origin + offset, QUADRANT), CLAUDE_ORANGE)?;
+                target.fill_solid(&Rectangle::new(origin + offset, QUADRANT), color)?;
             }
         }
     }
     Ok(())
 }
 
-/// Draws the Codex pet of the session with [`session_hash`] `hash` as it is
+/// Draws the OpenAI pet of the session with [`session_hash`] `hash` as it is
 /// `tick` ticks into the animation for `status`, centered in the [`SIZE`]
 /// area whose top-left corner is `top_left`.
 pub(super) fn draw_pet<D>(
@@ -150,7 +162,7 @@ where
 
 /// Returns the hash that picks the random animation of the `nth` session
 /// named `name`, counting from 0 in the order the Mac sends them: the
-/// mascot's moves for Claude Code, and the pet for Codex.
+/// mascot's moves for Claude Code, and the pet for pi or Codex.
 ///
 /// Sessions can share a name, such as two in one directory, so `nth` keeps
 /// theirs apart. The hash stays the same while the session runs, and a random
