@@ -10,7 +10,7 @@ license.workspace = true
 host = ["dep:serde_json", "dep:serialport"]
 # Desktop window that previews the deck with this Mac's sessions. `frames/sim`
 # builds SDL2 from source with cmake for the simulator.
-sim = ["host", "frames/sim", "dep:embedded-graphics-simulator"]
+sim = ["host", "frames/sim", "dep:embedded-graphics-simulator", "dep:sdl2"]
 
 [dependencies]
 embedded-graphics = "0.8"
@@ -20,6 +20,7 @@ heapless = "0.8"
 link-lib = { path = "../link-lib" }
 serde_json = { version = "1.0.154", optional = true }
 serialport = { version = "4.10.1", default-features = false, optional = true }
+sdl2 = { version = "0.38", optional = true }
 
 # Sends this Mac's sessions to the deck over the USB cable.
 [[bin]]

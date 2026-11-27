@@ -121,6 +121,7 @@ dependencies = [
  "frames",
  "heapless",
  "link-lib",
+ "sdl2",
  "serde_json",
  "serialport",
 ]

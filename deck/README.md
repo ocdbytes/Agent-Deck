@@ -25,10 +25,19 @@ hardware requirements.
 
 ## Preview
 
-Open a desktop preview; use ← and → to change pages:
+Open a resizable desktop preview; use ← and → to change pages:
 
 ```sh
 cargo run -p deck --example preview --features sim
+```
+
+The preview opens at the panel's 240×320 resolution and can be resized freely.
+
+On macOS, build and open the menu bar app from the repository root:
+
+```sh
+scripts/build-macos-app.sh
+open "dist/Agent Deck.app"
 ```
 
 Save one frame as a PNG instead:
