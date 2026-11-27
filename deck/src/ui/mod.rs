@@ -43,7 +43,8 @@ const MAX_SUBAGENT_LOGOS: usize = 3;
 /// Space between small subagent logos, and before the count, in pixels.
 const SUBAGENT_GAP: i32 = 2;
 
-/// How far Chinese glyphs sit below the Latin baseline, in pixels.
+/// How far Chinese glyphs sit below the Latin baseline, in pixels, so that
+/// their middle lines up with the Latin text's.
 const CHINESE_DROP: i32 = 2;
 
 /// Values and names.

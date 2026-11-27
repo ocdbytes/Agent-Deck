@@ -75,6 +75,10 @@ fn main() {
     canvas
         .set_logical_size(SIZE.width, SIZE.height)
         .expect("cannot scale preview");
+    // Whole multiples only, so every panel pixel is the same size.
+    canvas
+        .set_integer_scale(true)
+        .expect("cannot scale preview");
     let texture_creator = canvas.texture_creator();
     let mut texture = texture_creator
         .create_texture_streaming(PixelFormatEnum::RGB24, SIZE.width, SIZE.height)
