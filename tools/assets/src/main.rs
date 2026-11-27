@@ -29,7 +29,7 @@ use resvg::{tiny_skia, usvg};
 /// whole pixel, fully lit.
 const ARK_PIXEL: &str = "fonts/arkpixel/ark-pixel-12px-monospaced-latin.ttf";
 
-/// DotGothic16, a pixel font drawn on a 16 px grid, for numbers and kanji.
+/// DotGothic16, a pixel font drawn on a 16 px grid, for numbers and Chinese text.
 const DOTGOTHIC: &str = "fonts/dotgothic16/DotGothic16-Regular.ttf";
 
 /// A font to render.
@@ -82,11 +82,11 @@ const FONTS: &[FontSpec] = &[
         pixel: true,
     },
     FontSpec {
-        name: "KANJI",
-        doc: "DotGothic16's kanji at its 16 px pixel size, pixel for pixel.",
+        name: "CHINESE",
+        doc: "DotGothic16's Chinese glyphs at its 16 px pixel size, pixel for pixel.",
         file: DOTGOTHIC,
         px: 16.0,
-        chars: "稼働待機今",
+        chars: "運行待機現在",
         pixel: true,
     },
 ];
