@@ -77,16 +77,26 @@ Install the ESP32 toolchain (`espup`, `espflash`) first; see the
 
 ## Desktop preview
 
-Preview sessions running on this Mac in a desktop window; use ← and → to
-change pages:
+Preview sessions running on this Mac in a resizable desktop window; use ← and
+→ to change pages:
 
 ```sh
 cargo run -p deck --example preview --features sim
 ```
 
-The preview builds SDL2 from source and requires CMake.
-`.cargo/config.toml` sets `CMAKE_POLICY_VERSION_MINIMUM` so CMake 4 accepts
-SDL2's build files.
+The preview opens at the panel's 240×320 resolution and can be resized freely.
+
+On macOS, build it as a small menu bar application (it does not add a Dock
+icon):
+
+```sh
+scripts/build-macos-app.sh
+open "dist/Agent Deck.app"
+```
+
+The preview builds SDL2 from source and requires CMake; the macOS app also
+requires Xcode Command Line Tools. `.cargo/config.toml` sets
+`CMAKE_POLICY_VERSION_MINIMUM` so CMake 4 accepts SDL2's build files.
 
 ## Checks
 

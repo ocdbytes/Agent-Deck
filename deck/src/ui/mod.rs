@@ -13,7 +13,7 @@ use link_lib::{Agent, Clock, Context, Status};
 
 use crate::{
     Row,
-    assets::{BODY, CLAUDE_SMALL, KANJI, NUMERAL, OPENAI_SMALL, PERCENT, PI_SMALL},
+    assets::{BODY, CHINESE, CLAUDE_SMALL, NUMERAL, OPENAI_SMALL, PERCENT, PI_SMALL},
     draw::{self, Image},
 };
 
@@ -43,9 +43,9 @@ const MAX_SUBAGENT_LOGOS: usize = 3;
 /// Space between small subagent logos, and before the count, in pixels.
 const SUBAGENT_GAP: i32 = 2;
 
-/// How far kanji sit below the Latin baseline, in pixels, so that their
-/// middle lines up with the Latin text's.
-const KANJI_DROP: i32 = 2;
+/// How far Chinese glyphs sit below the Latin baseline, in pixels, so that
+/// their middle lines up with the Latin text's.
+const CHINESE_DROP: i32 = 2;
 
 /// Values and names.
 const TEXT: Rgb565 = rgb(0xFFFFFF);
@@ -56,7 +56,7 @@ const DIM: Rgb565 = rgb(0xB8B5AE);
 /// Busy sessions.
 const GREEN: Rgb565 = rgb(0xB5F59A);
 
-/// Kanji accents and context warnings.
+/// Chinese accents and context warnings.
 const VERMILION: Rgb565 = rgb(0xFF7A52);
 
 /// Panel outlines and agent IDs.
@@ -230,14 +230,14 @@ where
         draw_subagents(target, small, row.subagents, right, at.y + 24)?;
     }
 
-    // ■ 稼働 busy, or □ 待機 idle.
+    // ■ 運行 busy, or □ 待機 idle.
     let busy = row.status == Status::Busy;
-    let (color, kanji) = if busy {
-        (GREEN, "稼働")
+    let (color, chinese) = if busy {
+        (GREEN, "運行")
     } else {
         (DIM, "待機")
     };
-    // The kanji's 15 px stand just below the animation.
+    // The Chinese glyphs' 15 px stand just below the animation.
     let y = at.y + 56;
     let marker = Rectangle::new(Point::new(left, y - 6), Size::new(6, 6));
     let marker_style = if busy {
@@ -248,9 +248,9 @@ where
     marker.into_styled(marker_style).draw(target)?;
     let x = draw::text(
         target,
-        &KANJI,
-        kanji,
-        Point::new(left + 10, y + KANJI_DROP),
+        &CHINESE,
+        chinese,
+        Point::new(left + 10, y + CHINESE_DROP),
         color,
     )?;
     draw::text(
@@ -390,9 +390,9 @@ where
     let y = at.y + 18;
     let x = draw::text(
         target,
-        &KANJI,
-        "今",
-        Point::new(left, y + KANJI_DROP),
+        &CHINESE,
+        "現在",
+        Point::new(left, y + CHINESE_DROP),
         Rgb565::BLACK,
     )?;
     draw::text(target, &BODY, "NOW", Point::new(x + 4, y), Rgb565::BLACK)?;

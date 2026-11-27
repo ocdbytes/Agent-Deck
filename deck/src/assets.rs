@@ -31,13 +31,13 @@ pub(crate) const PERCENT: Font = Font {
     data: include_bytes!("../assets/gen/percent.bin"),
 };
 
-/// DotGothic16's kanji at its 16 px pixel size, pixel for pixel.
-pub(crate) const KANJI: Font = Font {
-    chars: "稼働待機今",
+/// DotGothic16's Chinese glyphs at its 16 px pixel size, pixel for pixel.
+pub(crate) const CHINESE: Font = Font {
+    chars: "運行待機現在",
     width: 16,
     height: 15,
     baseline: 14,
-    data: include_bytes!("../assets/gen/kanji.bin"),
+    data: include_bytes!("../assets/gen/chinese.bin"),
 };
 
 /// Claude's logo, for Claude Code. Quarter size, for subagents.
